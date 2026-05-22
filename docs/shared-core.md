@@ -67,10 +67,10 @@ core.dispose();
 
 ## What's shared, what's not
 
-| Shared | Per wrapped client |
-| --- | --- |
-| Decision cache (one LRU keyed by tag scope) | The `.budget` snapshot (each wrapped client tracks its own latest decision) |
-| Events queue (one batch POST) | The `.flush()` and `.dispose()` exposed on each wrapped client (they delegate to the same core) |
+| Shared                                      | Per wrapped client                                                                              |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Decision cache (one LRU keyed by tag scope) | The `.budget` snapshot (each wrapped client tracks its own latest decision)                     |
+| Events queue (one batch POST)               | The `.flush()` and `.dispose()` exposed on each wrapped client (they delegate to the same core) |
 
 A wrapped client's `.flush()` and `.dispose()` are conveniences. `core.flush()` and `core.dispose()` are the canonical drain.
 
@@ -102,11 +102,11 @@ afterEach(() => {
 
 ```ts
 interface BursoraCore {
-    readonly decision: DecisionLookup;   // internal: used by wrap()
-    readonly events: EventsClient;       // internal: used by wrap()
-    readonly now: () => number;          // internal: time injection for tests
-    flush(): Promise<void>;              // drain pending events
-    dispose(): void;                     // unregister from beforeExit drain
+    readonly decision: DecisionLookup; // internal: used by wrap()
+    readonly events: EventsClient; // internal: used by wrap()
+    readonly now: () => number; // internal: time injection for tests
+    flush(): Promise<void>; // drain pending events
+    dispose(): void; // unregister from beforeExit drain
 }
 ```
 

@@ -14,15 +14,15 @@ The queue is in-memory. A hard `process.kill -9` or runtime crash drops the queu
 
 ## Where to flush
 
-| Process type | Action |
-| --- | --- |
-| Long-running server (Express, Next.js dev) | Nothing. `beforeExit` drains on shutdown. |
-| Long-running server with HMR | Call `client.dispose()` on module replacement so the old client doesn't keep its `beforeExit` slot. |
-| AWS Lambda | `await client.flush()` at end of handler. |
-| Cloudflare Workers | `await client.flush()` inside `ctx.waitUntil()` so the response returns first. |
-| Vercel Serverless | `await client.flush()` at end of handler. |
-| Vercel Edge | `event.waitUntil(client.flush())` pattern. |
-| CLI script | `await client.flush()` before `process.exit()`. |
+| Process type                               | Action                                                                                              |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| Long-running server (Express, Next.js dev) | Nothing. `beforeExit` drains on shutdown.                                                           |
+| Long-running server with HMR               | Call `client.dispose()` on module replacement so the old client doesn't keep its `beforeExit` slot. |
+| AWS Lambda                                 | `await client.flush()` at end of handler.                                                           |
+| Cloudflare Workers                         | `await client.flush()` inside `ctx.waitUntil()` so the response returns first.                      |
+| Vercel Serverless                          | `await client.flush()` at end of handler.                                                           |
+| Vercel Edge                                | `event.waitUntil(client.flush())` pattern.                                                          |
+| CLI script                                 | `await client.flush()` before `process.exit()`.                                                     |
 
 ## Lambda example
 
@@ -121,14 +121,14 @@ afterEach(() => {
 
 If Bursora is unreachable or slow, the SDK doesn't stand between your app and the provider:
 
-| Path | Failure | What the SDK does |
-| --- | --- | --- |
-| Pre-call decision | Timeout (1.5 s default) | Return `null`; call proceeds |
-| Pre-call decision | Non-2xx status | Return `null`; call proceeds; log `bursora_decision_unavailable` |
-| Pre-call decision | Malformed JSON | Return `null`; call proceeds; log |
-| Post-call event POST | Timeout (5 s default) | Drop the batch; log `bursora_ingest_unavailable` |
-| Post-call event POST | Non-2xx status | Drop the batch; log |
-| Setup error POST | Any | Swallow |
+| Path                 | Failure                 | What the SDK does                                                |
+| -------------------- | ----------------------- | ---------------------------------------------------------------- |
+| Pre-call decision    | Timeout (1.5 s default) | Return `null`; call proceeds                                     |
+| Pre-call decision    | Non-2xx status          | Return `null`; call proceeds; log `bursora_decision_unavailable` |
+| Pre-call decision    | Malformed JSON          | Return `null`; call proceeds; log                                |
+| Post-call event POST | Timeout (5 s default)   | Drop the batch; log `bursora_ingest_unavailable`                 |
+| Post-call event POST | Non-2xx status          | Drop the batch; log                                              |
+| Setup error POST     | Any                     | Swallow                                                          |
 
 The provider call always either runs or surfaces the provider's own error. Bursora errors never block the path your user is on.
 

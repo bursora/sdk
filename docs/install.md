@@ -54,14 +54,14 @@ The SDK targets `target: "es2022"` and `module: "preserve"`. Strict-mode TypeScr
 
 ## Runtimes
 
-| Runtime | Supported | Notes |
-| --- | --- | --- |
-| Node ≥ 18 | yes | Primary target |
-| Bun ≥ 1.0 | yes | Tests run on Bun |
-| Deno | yes | Use `npm:@bursora/sdk` |
-| Cloudflare Workers | yes | Set `nodejs_compat` flag for `AsyncLocalStorage` |
-| Vercel Edge | yes | Same `AsyncLocalStorage` requirement |
-| Browser | no | API key in browser = leak |
+| Runtime            | Supported | Notes                                            |
+| ------------------ | --------- | ------------------------------------------------ |
+| Node ≥ 18          | yes       | Primary target                                   |
+| Bun ≥ 1.0          | yes       | Tests run on Bun                                 |
+| Deno               | yes       | Use `npm:@bursora/sdk`                           |
+| Cloudflare Workers | yes       | Set `nodejs_compat` flag for `AsyncLocalStorage` |
+| Vercel Edge        | yes       | Same `AsyncLocalStorage` requirement             |
+| Browser            | no        | API key in browser = leak                        |
 
 `withTags` uses Node's `AsyncLocalStorage`. Edge runtimes that polyfill it (Cloudflare with `nodejs_compat`, Vercel Edge) work; pure-V8 runtimes don't.
 

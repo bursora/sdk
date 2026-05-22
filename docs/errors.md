@@ -11,9 +11,9 @@ Thrown by the wrap _before_ the provider call when the server returns `{ allow: 
 ```ts
 class BudgetExceededError extends Error {
     readonly name: "BudgetExceededError";
-    readonly message: string;        // "Budget exceeded: <reason>"
-    readonly tag: Tags;              // scope that tripped
-    readonly reason: string;         // server-supplied machine code
+    readonly message: string; // "Budget exceeded: <reason>"
+    readonly tag: Tags; // scope that tripped
+    readonly reason: string; // server-supplied machine code
     readonly mode: "block" | "throttle" | "notify"; // always "block" for thrown errors
 }
 
@@ -37,9 +37,9 @@ try {
 } catch (err) {
     if (err instanceof BudgetExceededError) {
         // budget hit; downgrade or surface the error
-        console.log(err.tag);    // { tenant_id: "acme" }
+        console.log(err.tag); // { tenant_id: "acme" }
         console.log(err.reason); // "budget_exceeded:tenant_id:acme:monthly:50.00"
-        console.log(err.mode);   // "block"
+        console.log(err.mode); // "block"
         return fallback();
     }
     throw err;

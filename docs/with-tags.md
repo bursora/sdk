@@ -60,8 +60,8 @@ Internally, `withTags` runs the body inside `AsyncLocalStorage.run()`. Every wra
 ```ts
 await withTags({ tenant_id: "acme" }, async () => {
     await Promise.all([
-        callOne(),  // tagged
-        callTwo(),  // tagged
+        callOne(), // tagged
+        callTwo(), // tagged
         callThree(), // tagged
     ]);
 });
@@ -107,12 +107,9 @@ export async function POST(request: Request) {
 ```ts
 // Hono
 app.post("/chat", async (c) => {
-    return withTags(
-        { tenant_id: c.req.header("x-tenant") ?? "anon" },
-        async () => {
-            // ...
-        },
-    );
+    return withTags({ tenant_id: c.req.header("x-tenant") ?? "anon" }, async () => {
+        // ...
+    });
 });
 ```
 

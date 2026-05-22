@@ -65,9 +65,9 @@ Token math: same as OpenAI's chat completions (DeepSeek mirrors `prompt_tokens_d
 
 ## Models
 
-| Model | Notes |
-| --- | --- |
-| `deepseek-chat` | General chat |
+| Model               | Notes           |
+| ------------------- | --------------- |
+| `deepseek-chat`     | General chat    |
 | `deepseek-reasoner` | Reasoning model |
 
 Bursora's pricing catalog tracks both. See the [Pricing page](../../concepts/pricing.md).

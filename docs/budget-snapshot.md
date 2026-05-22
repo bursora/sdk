@@ -7,7 +7,7 @@ A read-only headroom snapshot on every wrapped client. Read it between calls to 
 ```ts
 interface BudgetSnapshot {
     readonly remainingUsd: number; // USD left under tightest applicable budget
-    readonly resetAt: string;      // ISO timestamp when that budget resets
+    readonly resetAt: string; // ISO timestamp when that budget resets
 }
 
 const snap: BudgetSnapshot | null = openai.budget;

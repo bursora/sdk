@@ -24,8 +24,8 @@ The Anthropic client reads `ANTHROPIC_API_KEY` from the env by default.
 
 ## Instrumented methods
 
-| Method | Purpose |
-| --- | --- |
+| Method            | Purpose                                       |
+| ----------------- | --------------------------------------------- |
 | `messages.create` | Messages API (the one method Anthropic ships) |
 
 ## Messages
@@ -141,9 +141,9 @@ See [errors](../errors.md).
 
 ## Compatibility
 
-| `@anthropic-ai/sdk` package | Status |
-| --- | --- |
-| Latest | supported |
+| `@anthropic-ai/sdk` package | Status    |
+| --------------------------- | --------- |
+| Latest                      | supported |
 
 ## Next
 

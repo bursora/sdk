@@ -1,13 +1,13 @@
 {
-  "name": "bursora-playground",
-  "version": "0.0.0",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "start": "bun run index.ts start",
-    "anomaly": "bun run index.ts anomaly"
-  },
-  "dependencies": {
-    "@bursora/sdk": "file:.."
-  }
+    "name": "bursora-playground",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "start": "bun run index.ts start",
+        "anomaly": "bun run index.ts anomaly"
+    },
+    "dependencies": {
+        "@bursora/sdk": "file:.."
+    }
 }

@@ -5,10 +5,7 @@
 ## Signature
 
 ```ts
-function wrap<T extends object>(
-    client: T,
-    optsOrCore: BursoraOptions | BursoraCore,
-): Wrapped<T>;
+function wrap<T extends object>(client: T, optsOrCore: BursoraOptions | BursoraCore): Wrapped<T>;
 
 interface BursoraOptions {
     readonly apiKey: string;
@@ -41,22 +38,22 @@ await openai.chat.completions.create({
 
 The returned object is structurally identical to the input client; existing call sites keep compiling. Three extras get added:
 
-| Property | What it does |
-| --- | --- |
-| `.flush()` | Drain queued usage events. Returns a Promise that resolves when the in-flight POST completes (or fails). |
+| Property     | What it does                                                                                                      |
+| ------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `.flush()`   | Drain queued usage events. Returns a Promise that resolves when the in-flight POST completes (or fails).          |
 | `.dispose()` | Unregister from the shared `beforeExit` drain. Call on HMR teardown or after `.flush()` in short-lived processes. |
-| `.budget` | Read-only headroom snapshot from the most recent decision. `null` until the first decision lands. |
+| `.budget`    | Read-only headroom snapshot from the most recent decision. `null` until the first decision lands.                 |
 
 ## Provider detection
 
 Wrap inspects the client's shape to pick a manifest:
 
-| Client shape | Detected as |
-| --- | --- |
-| OpenAI client with `chat.completions.create`, `embeddings.create`, etc. | `openai` |
-| Anthropic client with `messages.create` | `anthropic` |
-| OpenAI client with `baseURL` containing `"deepseek"` | `deepseek` (OpenAI shape) |
-| Anthropic client with `baseURL` containing `"deepseek"` | `deepseek` (Anthropic compat shape) |
+| Client shape                                                            | Detected as                         |
+| ----------------------------------------------------------------------- | ----------------------------------- |
+| OpenAI client with `chat.completions.create`, `embeddings.create`, etc. | `openai`                            |
+| Anthropic client with `messages.create`                                 | `anthropic`                         |
+| OpenAI client with `baseURL` containing `"deepseek"`                    | `deepseek` (OpenAI shape)           |
+| Anthropic client with `baseURL` containing `"deepseek"`                 | `deepseek` (Anthropic compat shape) |
 
 Detection order: DeepSeek variants first, then plain OpenAI and Anthropic. A DeepSeek-flavored client always wins over the plain shape.
 
@@ -72,12 +69,12 @@ A setup error is also POSTed to the dashboard so the admin sees the misconfigura
 
 Per provider:
 
-| Provider | Methods |
-| --- | --- |
-| OpenAI | `chat.completions.create`, `responses.create`, `embeddings.create`, `beta.chat.completions.parse` |
-| Anthropic | `messages.create` |
-| DeepSeek (OpenAI shape) | same as OpenAI |
-| DeepSeek (Anthropic shape) | same as Anthropic |
+| Provider                   | Methods                                                                                           |
+| -------------------------- | ------------------------------------------------------------------------------------------------- |
+| OpenAI                     | `chat.completions.create`, `responses.create`, `embeddings.create`, `beta.chat.completions.parse` |
+| Anthropic                  | `messages.create`                                                                                 |
+| DeepSeek (OpenAI shape)    | same as OpenAI                                                                                    |
+| DeepSeek (Anthropic shape) | same as Anthropic                                                                                 |
 
 Anything else on the client passes through untouched.
 

@@ -24,11 +24,11 @@ The OpenAI client reads `OPENAI_API_KEY` from the env by default; pass it explic
 
 ## Instrumented methods
 
-| Method | Purpose | Required |
-| --- | --- | --- |
-| `chat.completions.create` | Chat completions | yes |
-| `responses.create` | Responses API | optional |
-| `embeddings.create` | Embeddings | yes |
+| Method                        | Purpose           | Required |
+| ----------------------------- | ----------------- | -------- |
+| `chat.completions.create`     | Chat completions  | yes      |
+| `responses.create`            | Responses API     | optional |
+| `embeddings.create`           | Embeddings        | yes      |
 | `beta.chat.completions.parse` | Structured output | optional |
 
 Methods marked optional are tolerated as missing if the OpenAI package version doesn't ship them. Required methods missing means `wrap()` throws.
@@ -171,10 +171,10 @@ See [errors](../errors.md).
 
 ## Compatibility
 
-| `openai` package | Status |
-| --- | --- |
-| ≥ v4 | supported |
-| v3.x | not supported (`chat.completions.create` shape differs) |
+| `openai` package | Status                                                  |
+| ---------------- | ------------------------------------------------------- |
+| ≥ v4             | supported                                               |
+| v3.x             | not supported (`chat.completions.create` shape differs) |
 
 ## Next
 

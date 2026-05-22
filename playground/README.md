@@ -24,14 +24,14 @@ bun run anomaly    # seed baseline + spike, trigger anomaly cron
 
 ## Flags (both commands)
 
-| Flag                | Default (start) | Default (anomaly) |
-| ------------------- | --------------- | ----------------- |
-| `--calls`           | 30              | 5                 |
-| `--interval` (ms)   | 200             | 100               |
-| `--prompt-min`      | 200             | 180000            |
-| `--prompt-max`      | 2500            | 220000            |
-| `--completion-min`  | 50              | 45000             |
-| `--completion-max`  | 800             | 55000             |
+| Flag               | Default (start) | Default (anomaly) |
+| ------------------ | --------------- | ----------------- |
+| `--calls`          | 30              | 5                 |
+| `--interval` (ms)  | 200             | 100               |
+| `--prompt-min`     | 200             | 180000            |
+| `--prompt-max`     | 2500            | 220000            |
+| `--completion-min` | 50              | 45000             |
+| `--completion-max` | 800             | 55000             |
 
 Examples:
 
