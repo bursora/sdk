@@ -1,0 +1,67 @@
+{
+    "name": "@bursora/sdk",
+    "version": "0.1.0",
+    "description": "Bursora SDK — wrap your AI provider clients to enforce per-agent budgets.",
+    "license": "Apache-2.0",
+    "author": "Vildan Bina <vildanbina@gmail.com>",
+    "homepage": "https://bursora.com",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/vildanbina/bursora.git",
+        "directory": "sdk"
+    },
+    "keywords": [
+        "llm",
+        "openai",
+        "anthropic",
+        "cost",
+        "budget",
+        "ai-agent"
+    ],
+    "main": "./dist/index.cjs",
+    "module": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.mjs",
+            "require": "./dist/index.cjs"
+        }
+    },
+    "files": [
+        "dist",
+        "README.md",
+        "LICENSE",
+        "CHANGELOG.md"
+    ],
+    "publishConfig": {
+        "access": "public"
+    },
+    "scripts": {
+        "build": "tsup",
+        "dev": "tsup --watch",
+        "test": "bun test",
+        "lint": "eslint .",
+        "lint:fix": "eslint . --fix",
+        "typecheck": "tsc --noEmit",
+        "format": "prettier --write .",
+        "format:check": "prettier --check .",
+        "check": "bun run typecheck && bun run lint && bun run format:check && bun test",
+        "prepublishOnly": "bun run build"
+    },
+    "engines": {
+        "node": ">=18",
+        "bun": ">=1.0"
+    },
+    "devDependencies": {
+        "@eslint/js": "^10.0.1",
+        "@types/bun": "^1.3.13",
+        "@types/node": "^25.6.2",
+        "eslint": "^10.3.0",
+        "prettier": "^3.8.3",
+        "prettier-plugin-organize-imports": "^4.1.0",
+        "tsup": "^8.5.1",
+        "typescript": "^6.0.3",
+        "typescript-eslint": "^8.58.1"
+    }
+}

@@ -1,0 +1,203 @@
+/**
+ * createBursora — single shared owner of decision cache + events queue.
+ *
+ * Behaviors:
+ *   - constructor wires decision + events + now
+ *   - flush() drains the shared events queue
+ *   - dispose() removes events client from beforeExit drain
+ *   - two wrappers sharing one BursoraCore share the same queue:
+ *     core.flush() drains events recorded across all wrapped clients
+ */
+
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { createBursora } from "../src/bursora";
+import { __pruneLiveClients } from "../src/internal/events";
+import type { Decision } from "../src/types";
+import { wrap } from "../src/wrap";
+
+const ALLOW: Decision = { allow: true, mode: "notify", reason: "ok", ttl_s: 60 };
+
+const API_KEY = "bsk_47c05e5d-af35-49a3-86a7-eaec1c86a2f1_a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6";
+const ENDPOINT = "https://app.bursora.com";
+
+let originalFetch: typeof fetch;
+let originalWarn: typeof console.warn;
+
+function stubFetch(impl: typeof fetch): void {
+    globalThis.fetch = impl;
+}
+
+beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    originalWarn = console.warn;
+    console.warn = () => {};
+});
+
+afterEach(() => {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+});
+
+describe("createBursora — wiring", () => {
+    test("returns a core with decision, events, now, flush, dispose", () => {
+        stubFetch((async () => new Response("", { status: 202 })) as unknown as typeof fetch);
+        const core = createBursora({ apiKey: API_KEY, endpoint: ENDPOINT });
+        expect(typeof core.decision.fetchDecision).toBe("function");
+        expect(typeof core.events.record).toBe("function");
+        expect(typeof core.events.flush).toBe("function");
+        expect(typeof core.now).toBe("function");
+        expect(typeof core.flush).toBe("function");
+        expect(typeof core.dispose).toBe("function");
+        expect(core.now()).toBeGreaterThan(0);
+        core.dispose();
+    });
+});
+
+describe("createBursora — flush()", () => {
+    test("flush() POSTs queued events to /api/v1/events", async () => {
+        const fetchCalls: string[] = [];
+        stubFetch(((url: string | URL | Request) => {
+            fetchCalls.push(typeof url === "string" ? url : url.toString());
+            return Promise.resolve(new Response("", { status: 202 }));
+        }) as unknown as typeof fetch);
+        const core = createBursora({ apiKey: API_KEY, endpoint: ENDPOINT });
+        core.events.record({
+            provider: "openai",
+            model: "gpt-4o",
+            promptTokens: 1,
+            completionTokens: 1,
+            ts: "2026-05-13T00:00:00.000Z",
+        });
+        await core.flush();
+        expect(fetchCalls).toHaveLength(1);
+        expect(fetchCalls[0]).toContain("/api/v1/events");
+        core.dispose();
+    });
+
+    test("flush() swallows transport errors", async () => {
+        stubFetch((async () => {
+            throw new Error("network down");
+        }) as unknown as typeof fetch);
+        const core = createBursora({ apiKey: API_KEY, endpoint: ENDPOINT });
+        core.events.record({
+            provider: "openai",
+            model: "gpt-4o",
+            promptTokens: 1,
+            completionTokens: 1,
+            ts: "2026-05-13T00:00:00.000Z",
+        });
+        await expect(core.flush()).resolves.toBeUndefined();
+        core.dispose();
+    });
+});
+
+describe("createBursora — dispose()", () => {
+    test("dispose() removes events client from beforeExit drain", async () => {
+        __pruneLiveClients();
+        const fetchCalls: string[] = [];
+        stubFetch(((url: string | URL | Request) => {
+            fetchCalls.push(typeof url === "string" ? url : url.toString());
+            return Promise.resolve(new Response("", { status: 202 }));
+        }) as unknown as typeof fetch);
+        const core = createBursora({ apiKey: API_KEY, endpoint: ENDPOINT });
+        core.events.record({
+            provider: "openai",
+            model: "gpt-4o",
+            promptTokens: 1,
+            completionTokens: 1,
+            ts: "2026-05-13T00:00:00.000Z",
+        });
+        core.dispose();
+        const handler = process
+            .listeners("beforeExit")
+            .find((l) => l.name === "bursoraDrainOnBeforeExit") as
+            | ((code: number) => unknown)
+            | undefined;
+        if (handler !== undefined) await Promise.resolve(handler(0));
+        expect(fetchCalls).toHaveLength(0);
+    });
+});
+
+describe("createBursora — shared queue across wrappers", () => {
+    test("two wrappers sharing one core drain through a single flush() call", async () => {
+        const fetchCalls: { url: string; body: string }[] = [];
+        stubFetch(((url: string | URL | Request, init?: RequestInit) => {
+            const u = typeof url === "string" ? url : url.toString();
+            if (u.includes("/api/v1/events")) {
+                fetchCalls.push({ url: u, body: String(init?.body ?? "") });
+            }
+            if (u.includes("/api/v1/budget")) {
+                return Promise.resolve(
+                    new Response(JSON.stringify(ALLOW), {
+                        status: 200,
+                        headers: { "content-type": "application/json" },
+                    }),
+                );
+            }
+            return Promise.resolve(new Response("", { status: 202 }));
+        }) as unknown as typeof fetch);
+
+        const core = createBursora({ apiKey: API_KEY, endpoint: ENDPOINT });
+
+        const openaiClient = {
+            chat: {
+                completions: {
+                    create: async (_args: unknown) => ({
+                        id: "c1",
+                        model: "gpt-4o",
+                        usage: { prompt_tokens: 1, completion_tokens: 1 },
+                    }),
+                },
+            },
+            embeddings: { create: async (_args: unknown) => ({}) },
+        };
+        const anthropicClient = {
+            messages: {
+                create: async (_args: unknown) => ({
+                    id: "m1",
+                    model: "claude-3-5-sonnet-20241022",
+                    usage: { input_tokens: 2, output_tokens: 2 },
+                }),
+            },
+        };
+
+        const wOpenAI = wrap(openaiClient, core);
+        const wAnthropic = wrap(anthropicClient, core);
+
+        await wOpenAI.chat.completions.create({
+            model: "gpt-4o",
+            messages: [{ role: "user", content: "hi" }],
+        });
+        await wAnthropic.messages.create({
+            model: "claude-3-5-sonnet-20241022",
+            max_tokens: 16,
+            messages: [{ role: "user", content: "hi" }],
+        });
+
+        await core.flush();
+
+        const allBodies = fetchCalls.map((c) => c.body).join("");
+        expect(allBodies).toContain('"provider":"openai"');
+        expect(allBodies).toContain('"provider":"anthropic"');
+
+        core.dispose();
+    });
+
+    test("wrap(client, core) does not create a new events queue", () => {
+        __pruneLiveClients();
+        stubFetch((async () => new Response("", { status: 202 })) as unknown as typeof fetch);
+        const core = createBursora({ apiKey: API_KEY, endpoint: ENDPOINT });
+        const client = {
+            chat: {
+                completions: { create: async (_args: unknown) => ({ usage: {} }) },
+            },
+            embeddings: { create: async (_args: unknown) => ({}) },
+        };
+        wrap(client, core);
+        wrap(client, core);
+        wrap(client, core);
+
+        core.dispose();
+        expect(__pruneLiveClients()).toBe(0);
+    });
+});
