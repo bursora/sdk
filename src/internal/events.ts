@@ -37,6 +37,17 @@ export interface EventsClient {
     dispose?(): void;
 }
 
+/**
+ * Factory-built EventsClient. The SDK-built client always provides `dispose`
+ * and `recordSetupError`; the base `EventsClient` keeps them optional only so
+ * external/test sinks can omit them. Internal callers should accept this type
+ * to skip the optional-chain dance.
+ */
+export type ManagedEventsClient = EventsClient &
+    Required<Pick<EventsClient, "dispose" | "recordSetupError">> & {
+        readonly __pendingSetupErrorsCount: () => number;
+    };
+
 /** Top-level `flush()` is fire-and-forget; never let injected sinks reject. */
 export async function safeFlush(sink: Pick<EventsClient, "flush">): Promise<void> {
     try {
@@ -52,11 +63,15 @@ export interface EventsClientOptions {
     readonly fetch?: typeof fetch;
     readonly log?: (msg: string, meta?: Record<string, unknown>) => void;
     readonly ingestTimeoutMs?: number;
+    /** Test-only clock injection. Defaults to `Date.now`. */
+    readonly now?: () => number;
 }
 
 const INGEST_UNAVAILABLE = "bursora_ingest_unavailable";
 const SETUP_ERROR_UNAVAILABLE = "bursora_setup_error_unavailable";
 const DEFAULT_INGEST_TIMEOUT_MS = 5000;
+const MAX_PENDING_SETUP_ERRORS = 256;
+const PENDING_SETUP_ERROR_TTL_MS = 60 * 60 * 1000;
 
 function logTransportFailure(log: LogFn, key: string, result: HttpResult): void {
     if (result.timedOut === true) {
@@ -69,13 +84,12 @@ function logTransportFailure(log: LogFn, key: string, result: HttpResult): void 
     });
 }
 
-export function createEventsClient(
-    opts: EventsClientOptions,
-): EventsClient & { dispose: () => void; recordSetupError: (input: SetupErrorInput) => void } {
+export function createEventsClient(opts: EventsClientOptions): ManagedEventsClient {
     const queue: EventInput[] = [];
     const transport = createTransport(opts.fetch !== undefined ? { fetch: opts.fetch } : {});
     const log = opts.log ?? createDefaultLog("ingest");
     const setupErrorLog = opts.log ?? createDefaultLog("setup_error");
+    const now = opts.now ?? Date.now;
     let url: string | null;
     let setupErrorUrl: string | null;
     let urlError = "";
@@ -107,12 +121,22 @@ export function createEventsClient(
     // `beforeExit` drain that wraps it) can wait for them. Short-lived
     // processes (Lambda, Workers, CLIs) would otherwise exit with the
     // setup-error POST still in transit.
-    const pendingSetupErrors = new Set<Promise<void>>();
+    //
+    // Bounded by MAX_PENDING_SETUP_ERRORS (FIFO drop) and
+    // PENDING_SETUP_ERROR_TTL_MS so long-lived processes whose POSTs hang
+    // (proxy black-hole, broken egress) don't leak memory. Map preserves
+    // insertion order; value is the enqueue timestamp in ms.
+    const pendingSetupErrors = new Map<Promise<void>, number>();
 
-    const client: EventsClient & {
-        dispose: () => void;
-        recordSetupError: (input: SetupErrorInput) => void;
-    } = {
+    const evictExpiredSetupErrors = (): void => {
+        const cutoff = now() - PENDING_SETUP_ERROR_TTL_MS;
+        for (const [p, ts] of pendingSetupErrors) {
+            if (ts > cutoff) break;
+            pendingSetupErrors.delete(p);
+        }
+    };
+
+    const client: ManagedEventsClient = {
         record(event: EventInput): void {
             queue.push(event);
         },
@@ -126,8 +150,9 @@ export function createEventsClient(
                     await postJson(url, JSON.stringify({ events }), log, INGEST_UNAVAILABLE);
                 }
             }
+            evictExpiredSetupErrors();
             if (pendingSetupErrors.size > 0) {
-                await Promise.allSettled([...pendingSetupErrors]);
+                await Promise.allSettled([...pendingSetupErrors.keys()]);
             }
         },
         recordSetupError(input: SetupErrorInput): void {
@@ -138,17 +163,28 @@ export function createEventsClient(
                 });
                 return;
             }
+            evictExpiredSetupErrors();
+            // Drop the oldest in-flight POST (Map preserves insertion order)
+            // before adding a new one so the queue stays bounded.
+            while (pendingSetupErrors.size >= MAX_PENDING_SETUP_ERRORS) {
+                const oldest = pendingSetupErrors.keys().next().value;
+                if (oldest === undefined) break;
+                pendingSetupErrors.delete(oldest);
+            }
             const p = postJson(
                 setupErrorUrl,
                 JSON.stringify({ kind: input.kind }),
                 setupErrorLog,
                 SETUP_ERROR_UNAVAILABLE,
             ).catch(() => {});
-            pendingSetupErrors.add(p);
+            pendingSetupErrors.set(p, now());
             void p.finally(() => pendingSetupErrors.delete(p));
         },
         dispose(): void {
             unregisterClient(client);
+        },
+        __pendingSetupErrorsCount(): number {
+            return pendingSetupErrors.size;
         },
     };
 

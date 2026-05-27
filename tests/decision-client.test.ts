@@ -803,4 +803,171 @@ describe("decisionClient.fetchDecision", () => {
         expect(logs[0]?.msg).toBe("bursora_decision_unavailable");
         expect(logs[0]?.category).toBe("invalid_config");
     });
+
+    test("oversized ttl_s is clamped: cache refetches after 3600s (not the server value)", async () => {
+        // Defense against a buggy or hostile server caching for hours/days.
+        // 9999s would lock a stale decision in for over 2 hours; clamp to 3600.
+        const calls: MockCall[] = [];
+        let now = 0;
+        const fetchImpl = ((input: string | URL | Request) => {
+            calls.push({
+                url: typeof input === "string" ? input : input.toString(),
+                headers: {},
+            });
+            return Promise.resolve(
+                new Response(
+                    JSON.stringify({
+                        allow: true,
+                        mode: "notify",
+                        reason: "ok",
+                        ttl_s: 9999,
+                    }),
+                    { status: 200, headers: { "content-type": "application/json" } },
+                ),
+            );
+        }) as unknown as typeof fetch;
+        const client = createDecisionClient({
+            endpoint: "https://app.bursora.com",
+            apiKey: "k",
+            cacheCapacity: 8,
+            now: () => now,
+            fetch: fetchImpl,
+            log: () => {},
+        });
+        await client.fetchDecision({ tenant_id: "acme" });
+        // Just past the clamp window: cache must have expired, so refetch.
+        now = 3_600_500;
+        await client.fetchDecision({ tenant_id: "acme" });
+        expect(calls).toHaveLength(2);
+    });
+
+    test("oversized ttl_s within clamp window stays cached", async () => {
+        // Sanity: clamp doesn't shrink cache below 3600. 1 hour into the window
+        // the cached decision should still be served.
+        const calls: MockCall[] = [];
+        let now = 0;
+        const fetchImpl = ((input: string | URL | Request) => {
+            calls.push({
+                url: typeof input === "string" ? input : input.toString(),
+                headers: {},
+            });
+            return Promise.resolve(
+                new Response(
+                    JSON.stringify({
+                        allow: true,
+                        mode: "notify",
+                        reason: "ok",
+                        ttl_s: 9999,
+                    }),
+                    { status: 200, headers: { "content-type": "application/json" } },
+                ),
+            );
+        }) as unknown as typeof fetch;
+        const client = createDecisionClient({
+            endpoint: "https://app.bursora.com",
+            apiKey: "k",
+            cacheCapacity: 8,
+            now: () => now,
+            fetch: fetchImpl,
+            log: () => {},
+        });
+        await client.fetchDecision({ tenant_id: "acme" });
+        now = 3_500_000; // 3500s — under the 3600s clamp
+        await client.fetchDecision({ tenant_id: "acme" });
+        expect(calls).toHaveLength(1);
+    });
+
+    test("oversized ttl_s logs a clamp diagnostic", async () => {
+        const logs: Array<{ msg: string; meta: Record<string, unknown> | undefined }> = [];
+        const fetchImpl = (() =>
+            Promise.resolve(
+                new Response(
+                    JSON.stringify({
+                        allow: true,
+                        mode: "notify",
+                        reason: "ok",
+                        ttl_s: 9999,
+                    }),
+                    { status: 200, headers: { "content-type": "application/json" } },
+                ),
+            )) as unknown as typeof fetch;
+        const client = createDecisionClient({
+            endpoint: "https://app.bursora.com",
+            apiKey: "k",
+            cacheCapacity: 8,
+            now: () => 0,
+            fetch: fetchImpl,
+            log: (msg, meta) => logs.push({ msg, meta }),
+        });
+        await client.fetchDecision({ tenant_id: "acme" });
+        const clamp = logs.find((l) => l.meta?.category === "invalid_response");
+        expect(clamp).toBeDefined();
+        expect(clamp?.meta?.reason).toBe("ttl_clamped");
+    });
+
+    test("negative ttl_s is clamped to 0 (not cached) and logs a clamp diagnostic", async () => {
+        // Negative TTL would either thrash the endpoint or, if naively passed
+        // to the cache, behave undefined. Clamp to 0 (no cache) and warn.
+        const calls: MockCall[] = [];
+        const logs: Array<{ msg: string; meta: Record<string, unknown> | undefined }> = [];
+        const fetchImpl = ((input: string | URL | Request) => {
+            calls.push({
+                url: typeof input === "string" ? input : input.toString(),
+                headers: {},
+            });
+            return Promise.resolve(
+                new Response(
+                    JSON.stringify({
+                        allow: true,
+                        mode: "notify",
+                        reason: "ok",
+                        ttl_s: -5,
+                    }),
+                    { status: 200, headers: { "content-type": "application/json" } },
+                ),
+            );
+        }) as unknown as typeof fetch;
+        const client = createDecisionClient({
+            endpoint: "https://app.bursora.com",
+            apiKey: "k",
+            cacheCapacity: 8,
+            now: () => 0,
+            fetch: fetchImpl,
+            log: (msg, meta) => logs.push({ msg, meta }),
+        });
+        const first = await client.fetchDecision({ tenant_id: "acme" });
+        expect(first).not.toBeNull();
+        // Refetch confirms cache was not populated.
+        await client.fetchDecision({ tenant_id: "acme" });
+        expect(calls).toHaveLength(2);
+        const clamp = logs.find((l) => l.meta?.category === "invalid_response");
+        expect(clamp).toBeDefined();
+        expect(clamp?.meta?.reason).toBe("ttl_clamped");
+    });
+
+    test("normal ttl_s within bounds does not log a clamp diagnostic", async () => {
+        const logs: Array<{ msg: string; meta: Record<string, unknown> | undefined }> = [];
+        const fetchImpl = (() =>
+            Promise.resolve(
+                new Response(
+                    JSON.stringify({
+                        allow: true,
+                        mode: "notify",
+                        reason: "ok",
+                        ttl_s: 60,
+                    }),
+                    { status: 200, headers: { "content-type": "application/json" } },
+                ),
+            )) as unknown as typeof fetch;
+        const client = createDecisionClient({
+            endpoint: "https://app.bursora.com",
+            apiKey: "k",
+            cacheCapacity: 8,
+            now: () => 0,
+            fetch: fetchImpl,
+            log: (msg, meta) => logs.push({ msg, meta }),
+        });
+        await client.fetchDecision({ tenant_id: "acme" });
+        expect(logs).toHaveLength(0);
+    });
 });

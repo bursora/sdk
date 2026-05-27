@@ -118,6 +118,34 @@ describe("createBursora — dispose()", () => {
     });
 });
 
+describe("createBursora — clock injection", () => {
+    test("uses the injected clock instead of Date.now()", () => {
+        stubFetch((async () => new Response("", { status: 202 })) as unknown as typeof fetch);
+        let ticks = 0;
+        const clock = (): number => {
+            ticks += 1;
+            return 42_000 + ticks;
+        };
+        const core = createBursora({ apiKey: API_KEY, endpoint: ENDPOINT, clock });
+        expect(core.now()).toBe(42_001);
+        expect(core.now()).toBe(42_002);
+        core.dispose();
+    });
+
+    test("default clock reflects post-construction reassignment of globalThis.Date.now", () => {
+        stubFetch((async () => new Response("", { status: 202 })) as unknown as typeof fetch);
+        const originalDateNow = Date.now;
+        const core = createBursora({ apiKey: API_KEY, endpoint: ENDPOINT });
+        try {
+            Date.now = () => 7_777_777;
+            expect(core.now()).toBe(7_777_777);
+        } finally {
+            Date.now = originalDateNow;
+        }
+        core.dispose();
+    });
+});
+
 describe("createBursora — shared queue across wrappers", () => {
     test("two wrappers sharing one core drain through a single flush() call", async () => {
         const fetchCalls: { url: string; body: string }[] = [];

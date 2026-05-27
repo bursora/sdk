@@ -14,12 +14,12 @@ const storage = new AsyncLocalStorage<Tags>();
 
 /**
  * Read the current tags. Outside a `withTags` scope, returns an empty object.
- * The returned object is a defensive copy; mutating it does not affect the
- * underlying ALS context.
+ * Returns a deep clone; safe to mutate. Nested writes do not leak back into
+ * the underlying ALS context.
  */
 export function currentTags(): Tags {
     const raw = storage.getStore();
-    return raw === undefined ? {} : { ...raw };
+    return raw === undefined ? {} : structuredClone(raw);
 }
 
 /**

@@ -33,6 +33,14 @@ export interface DecisionClientOptions {
 
 const DECISION_UNAVAILABLE = "bursora_decision_unavailable";
 const DEFAULT_DECISION_TIMEOUT_MS = 1500;
+/**
+ * Cap server-supplied cache TTL. A buggy or hostile server sending huge or
+ * negative values would either freeze a stale decision in cache for hours or
+ * (via Math.max) get clamped to 0 and thrash the endpoint. One-hour ceiling
+ * is long enough that legitimate steady-state TTLs (seconds to minutes) pass
+ * through untouched.
+ */
+const MAX_DECISION_TTL_SECONDS = 3600;
 
 export function createDecisionClient(opts: DecisionClientOptions): DecisionClient {
     const cache = new LRUCache<Decision>({
@@ -101,8 +109,20 @@ export function createDecisionClient(opts: DecisionClientOptions): DecisionClien
                 });
                 return null;
             }
-            if (parsed.ttl_s > 0) {
-                cache.set(key, parsed, parsed.ttl_s);
+            const effectiveTtl = Math.max(
+                0,
+                Math.min(MAX_DECISION_TTL_SECONDS, parsed.ttl_s),
+            );
+            if (effectiveTtl !== parsed.ttl_s) {
+                log(DECISION_UNAVAILABLE, {
+                    category: "invalid_response",
+                    reason: "ttl_clamped",
+                    server_ttl_s: parsed.ttl_s,
+                    effective_ttl_s: effectiveTtl,
+                });
+            }
+            if (effectiveTtl > 0) {
+                cache.set(key, parsed, effectiveTtl);
             }
             return parsed;
         },

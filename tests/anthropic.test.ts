@@ -14,6 +14,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { BudgetExceededError } from "../src/errors";
+import { createAnthropicStreamHandler } from "../src/providers/anthropic";
 import type { Decision } from "../src/types";
 import { wrap, type BursoraCore, type DecisionLookup, type EventsClient } from "../src/wrap";
 
@@ -516,5 +517,27 @@ describe("wrap(anthropic)", () => {
         (wrapped as unknown as { dispose: () => void }).dispose();
         expect(underlyingDispose).toBe(1);
         expect(bursoraDispose).toBe(0);
+    });
+
+    test("stream handler is single-use: throws when a chunk arrives after message_stop", () => {
+        // Guards the fragile pattern where the closure-bound handler could be
+        // reused across streams. Each handler instance owns one stream.
+        const handler = createAnthropicStreamHandler();
+        handler({
+            type: "message_start",
+            message: {
+                id: "msg_reuse",
+                usage: { input_tokens: 4, output_tokens: 0 },
+            },
+        });
+        handler({
+            type: "message_delta",
+            delta: { stop_reason: "end_turn" },
+            usage: { output_tokens: 6 },
+        });
+        handler({ type: "message_stop" });
+        expect(() => handler({ type: "message_delta", usage: { output_tokens: 99 } })).toThrow(
+            /single-use/i,
+        );
     });
 });

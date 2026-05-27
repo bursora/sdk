@@ -36,6 +36,7 @@ interface RecordedEvent {
     readonly model: string;
     readonly promptTokens: number;
     readonly completionTokens: number;
+    readonly cacheTokens?: number;
     readonly errored?: boolean;
 }
 
@@ -204,6 +205,95 @@ describe("wrap(openai)", () => {
         expect(h.events).toHaveLength(1);
         expect(h.events[0]?.promptTokens).toBe(4);
         expect(h.events[0]?.completionTokens).toBe(2);
+    });
+
+    test("streaming preserves cacheTokens when an early chunk reports cached_tokens and the final chunk omits usage", async () => {
+        const h = buildHarness();
+
+        // Per issue #979: track cache across chunks; don't lose it when the
+        // final chunk omits usage.
+        async function* streamChunks() {
+            yield {
+                id: "c-1",
+                choices: [{ delta: { role: "assistant" } }],
+                usage: {
+                    prompt_tokens: 500,
+                    completion_tokens: 0,
+                    prompt_tokens_details: { cached_tokens: 100 },
+                },
+            };
+            yield {
+                id: "c-2",
+                choices: [{ delta: { content: "hi" } }],
+            };
+        }
+        const streamingClient: MockClient = {
+            chat: {
+                completions: {
+                    create: async () => streamChunks(),
+                },
+            },
+            responses: { create: async () => ({}) },
+            embeddings: { create: async () => ({}) },
+        };
+
+        const wrapped = wrap(streamingClient, h.core);
+        const stream = (await wrapped.chat.completions.create({
+            model: "gpt-4o",
+            stream: true,
+            messages: [{ role: "user", content: "hi" }],
+        })) as AsyncIterable<unknown>;
+        for await (const _ of stream) {
+            // drain
+        }
+        expect(h.events).toHaveLength(1);
+        expect(h.events[0]?.cacheTokens).toBe(100);
+        expect(h.events[0]?.promptTokens).toBe(400);
+        expect(h.events[0]?.completionTokens).toBe(0);
+    });
+
+    test("streaming preserves cacheTokens when chunk reports only cached_tokens (no prompt_tokens) and final chunk omits usage", async () => {
+        const h = buildHarness();
+
+        // Edge case: a chunk reports cached_tokens without an accompanying
+        // prompt_tokens. Subtracting cached from a zero prompt would underflow
+        // the bill; the handler must track cache separately and never go
+        // negative on promptTokens.
+        async function* streamChunks() {
+            yield {
+                id: "c-1",
+                choices: [{ delta: { role: "assistant" } }],
+                usage: {
+                    prompt_tokens_details: { cached_tokens: 100 },
+                },
+            };
+            yield {
+                id: "c-2",
+                choices: [{ delta: { content: "ok" } }],
+            };
+        }
+        const streamingClient: MockClient = {
+            chat: {
+                completions: {
+                    create: async () => streamChunks(),
+                },
+            },
+            responses: { create: async () => ({}) },
+            embeddings: { create: async () => ({}) },
+        };
+
+        const wrapped = wrap(streamingClient, h.core);
+        const stream = (await wrapped.chat.completions.create({
+            model: "gpt-4o",
+            stream: true,
+            messages: [{ role: "user", content: "hi" }],
+        })) as AsyncIterable<unknown>;
+        for await (const _ of stream) {
+            // drain
+        }
+        expect(h.events).toHaveLength(1);
+        expect(h.events[0]?.cacheTokens).toBe(100);
+        expect(h.events[0]?.promptTokens).toBe(0);
     });
 
     test("intercepts embeddings.create and emits one event with completionTokens: 0", async () => {

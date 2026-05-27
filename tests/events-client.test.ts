@@ -6,7 +6,12 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { __pruneLiveClients, createEventsClient } from "../src/internal/events";
+import {
+    __pruneLiveClients,
+    createEventsClient,
+    type EventsClient,
+    type ManagedEventsClient,
+} from "../src/internal/events";
 
 const findBursoraBeforeExitHandler = (): ((code: number) => unknown) | undefined =>
     process.listeners("beforeExit").find((l) => l.name === "bursoraDrainOnBeforeExit") as
@@ -572,5 +577,85 @@ describe("eventsClient", () => {
         expect(calls).toHaveLength(1);
         expect(logs).toContain("bursora_setup_error_unavailable");
         client.dispose();
+    });
+
+    test("pendingSetupErrors queue is capped at 256 with FIFO drop", () => {
+        // Hanging fetch: promises never resolve, so without a cap the queue
+        // would grow unbounded as the caller fires recordSetupError() in a loop.
+        const hangingFetch = (() =>
+            new Promise<Response>(() => {})) as unknown as typeof fetch;
+        const client = createEventsClient({
+            endpoint: "https://app.bursora.com",
+            apiKey: API_KEY,
+            fetch: hangingFetch,
+            log: () => {},
+        });
+        try {
+            for (let i = 0; i < 300; i++) {
+                client.recordSetupError({ kind: "sdk_unknown_provider" });
+            }
+            expect(client.__pendingSetupErrorsCount()).toBe(256);
+        } finally {
+            client.dispose();
+        }
+    });
+
+    test("factory return type guarantees dispose/recordSetupError are callable; raw EventsClient does not", () => {
+        // Type-level contract: the base `EventsClient` keeps `dispose` and
+        // `recordSetupError` optional so external/test sinks can omit them.
+        // The factory's `ManagedEventsClient` return type carries the guarantee
+        // that the SDK-built client always provides both, so internal callers
+        // need no optional chains.
+        const calls: MockCall[] = [];
+        const managed: ManagedEventsClient = createEventsClient({
+            endpoint: "https://app.bursora.com",
+            apiKey: API_KEY,
+            fetch: mockFetch(calls),
+            log: () => {},
+        });
+        // Callable without optional chain on the factory return type.
+        managed.recordSetupError({ kind: "sdk_unknown_provider" });
+        managed.dispose();
+        expect(typeof managed.dispose).toBe("function");
+        expect(typeof managed.recordSetupError).toBe("function");
+        // A raw EventsClient (e.g. a test sink) must NOT permit these
+        // calls without a null check, because they're optional on the
+        // base interface. These lines exist only to assert the type
+        // error; the `never` block prevents them from executing.
+        const raw: EventsClient = {
+            record: () => {},
+            flush: async () => {},
+        };
+        const unreachable = (): boolean => false;
+        if (unreachable()) {
+            // @ts-expect-error dispose is optional on the base EventsClient
+            raw.dispose();
+            // @ts-expect-error recordSetupError is optional on the base EventsClient
+            raw.recordSetupError({ kind: "sdk_unknown_provider" });
+        }
+    });
+
+    test("pendingSetupErrors drops entries older than the TTL on enqueue", () => {
+        const hangingFetch = (() =>
+            new Promise<Response>(() => {})) as unknown as typeof fetch;
+        let nowMs = 1_000_000;
+        const client = createEventsClient({
+            endpoint: "https://app.bursora.com",
+            apiKey: API_KEY,
+            fetch: hangingFetch,
+            log: () => {},
+            now: () => nowMs,
+        });
+        try {
+            client.recordSetupError({ kind: "sdk_unknown_provider" });
+            expect(client.__pendingSetupErrorsCount()).toBe(1);
+            // Advance past the 1-hour TTL.
+            nowMs += 60 * 60 * 1000 + 1;
+            client.recordSetupError({ kind: "sdk_unknown_provider" });
+            // First entry is older than TTL; only the second survives.
+            expect(client.__pendingSetupErrorsCount()).toBe(1);
+        } finally {
+            client.dispose();
+        }
     });
 });

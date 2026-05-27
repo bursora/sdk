@@ -244,6 +244,51 @@ describe("wrapCall — provider error path", () => {
         expect(h.events[0]?.promptTokens).toBe(0);
         expect(h.events[0]?.completionTokens).toBe(0);
     });
+
+    test("preserves error identity when event recording throws synchronously", async () => {
+        class ProviderError extends Error {
+            constructor(message: string) {
+                super(message);
+                this.name = "ProviderError";
+            }
+        }
+        const originalError = new ProviderError("provider boom");
+        const originalStack = originalError.stack;
+
+        const eventsClient = {
+            record: () => {
+                throw new Error("recording sink exploded");
+            },
+            flush: async () => {},
+        };
+        const decisionClient = {
+            fetchDecision: async () => ALLOW,
+        };
+
+        const wrapped = wrapCall(
+            async () => {
+                throw originalError;
+            },
+            {
+                extractCallMeta,
+                extractUsage,
+                decisionClient,
+                eventsClient,
+                now: () => 1_000,
+            },
+        );
+
+        let caught: unknown = null;
+        try {
+            await wrapped({ model: "gpt-4o" });
+        } catch (e) {
+            caught = e;
+        }
+        expect(caught).toBe(originalError);
+        expect(caught).toBeInstanceOf(ProviderError);
+        expect((caught as Error).stack).toBe(originalStack);
+        expect((caught as Error).message).toBe("provider boom");
+    });
 });
 
 describe("wrapCall — fail-open semantics", () => {
@@ -428,5 +473,137 @@ describe("wrapCall — streaming", () => {
         expect((caught as Error).message).toBe("stream interrupted");
         expect(h.events).toHaveLength(1);
         expect(h.events[0]?.errored).toBe(true);
+    });
+
+    test("throws a clear error when isStream=true but response is not async iterable", async () => {
+        const h = buildHarness({});
+        // Provider returns a plain object even though the call was marked as a stream.
+        // The wrapper must detect this and throw a descriptive error instead of
+        // silently casting and crashing on the consumer's first `for await`.
+        const wrapped = wrapCall(async () => ({ id: "not-a-stream" }) as unknown, {
+            extractCallMeta: () => ({
+                provider: "openai",
+                model: "gpt-4o",
+                isStream: true,
+            }),
+            extractUsage: () => ({
+                promptTokens: 0,
+                completionTokens: 0,
+            }),
+            createStreamHandler: () => () => null,
+            decisionClient: h.decisionClient,
+            eventsClient: h.eventsClient,
+            now: () => 1_000,
+        });
+        await expect(wrapped({ model: "gpt-4o", stream: true })).rejects.toThrow(/stream/i);
+    });
+});
+
+describe("wrapCall — per-scope flush serialization", () => {
+    test("second concurrent call's decision lookup observes the first call's flushed event", async () => {
+        // Two concurrent calls on the same scope race. Without serialization,
+        // call B's decision lookup runs before call A's flush settles; the
+        // server then computes B's budget from a stale snapshot.
+        let flushedCount = 0;
+        const decisionFlushSnapshots: number[] = [];
+        const events: RecordedEvent[] = [];
+
+        const decisionClient = {
+            fetchDecision: async (_tags: Record<string, string | undefined>) => {
+                decisionFlushSnapshots.push(flushedCount);
+                return ALLOW;
+            },
+        };
+        const eventsClient = {
+            record: (event: RecordedEvent) => {
+                events.push(event);
+            },
+            flush: async () => {
+                // Yield a couple of microtasks so a concurrent caller has a
+                // real chance to interleave past us — emulates real network
+                // POST latency without timers.
+                await Promise.resolve();
+                await Promise.resolve();
+                flushedCount += 1;
+            },
+        };
+
+        const wrapped = wrapCall(
+            async (_args: FakeArgs) =>
+                ({
+                    id: "r1",
+                    usage: { prompt_tokens: 1, completion_tokens: 1 },
+                }) satisfies FakeResponse,
+            {
+                extractCallMeta,
+                extractUsage,
+                decisionClient,
+                eventsClient,
+                now: () => 1_000,
+            },
+        );
+
+        await withTags({ tenant_id: "acme" }, async () => {
+            await Promise.all([wrapped({ model: "gpt-4o" }), wrapped({ model: "gpt-4o" })]);
+        });
+
+        expect(decisionFlushSnapshots).toHaveLength(2);
+        expect(events).toHaveLength(2);
+        // First call runs before any flush has completed.
+        expect(decisionFlushSnapshots[0]).toBe(0);
+        // Second call must see the first call's flush already settled.
+        expect(decisionFlushSnapshots[1]).toBe(1);
+    });
+
+    test("does not serialize across different scopes", async () => {
+        // Lock is scoped per tenant/agent/workflow. Concurrent calls on
+        // different scopes must proceed in parallel — otherwise per-call
+        // latency stacks linearly across unrelated tenants.
+        const startedDecisions: string[] = [];
+        const resolveDecision: Record<string, () => void> = {};
+        const decisionClient = {
+            fetchDecision: async (tags: Record<string, string | undefined>) => {
+                const key = tags.tenant_id ?? "";
+                startedDecisions.push(key);
+                // Block until the test releases this scope.
+                await new Promise<void>((res) => {
+                    resolveDecision[key] = res;
+                });
+                return ALLOW;
+            },
+        };
+        const eventsClient = {
+            record: () => {},
+            flush: async () => {},
+        };
+
+        const wrapped = wrapCall(
+            async (_args: FakeArgs) =>
+                ({
+                    id: "r1",
+                    usage: { prompt_tokens: 1, completion_tokens: 1 },
+                }) satisfies FakeResponse,
+            {
+                extractCallMeta,
+                extractUsage,
+                decisionClient,
+                eventsClient,
+                now: () => 1_000,
+            },
+        );
+
+        const a = withTags({ tenant_id: "acme" }, async () => wrapped({ model: "gpt-4o" }));
+        const b = withTags({ tenant_id: "globex" }, async () => wrapped({ model: "gpt-4o" }));
+        // Let both calls reach the blocked decision fetch.
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        // Both scopes must be in-flight in parallel; the lock is per-scope.
+        expect(startedDecisions.sort()).toEqual(["acme", "globex"]);
+
+        resolveDecision.acme?.();
+        resolveDecision.globex?.();
+        await Promise.all([a, b]);
     });
 });

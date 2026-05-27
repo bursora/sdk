@@ -61,25 +61,41 @@ export function wrap<T extends object>(
     const core = "apiKey" in optsOrCore ? createBursora(optsOrCore) : optsOrCore;
     const manifest = MANIFESTS.find((m) => m.detect(client)) ?? null;
     if (manifest === null) {
-        core.events.recordSetupError?.({ kind: "sdk_unknown_provider" });
+        // Guard with `typeof === 'function'` rather than `?.` so a custom
+        // EventsClient that exposes a non-callable `recordSetupError`
+        // (structural typing lets that slip past) can't mask the real
+        // detection error with a `TypeError: not a function`.
+        if (typeof core.events.recordSetupError === "function") {
+            core.events.recordSetupError({ kind: "sdk_unknown_provider" });
+        }
         throw new Error(
             "[bursora] wrap: unable to detect provider; expected an OpenAI, Anthropic, or DeepSeek-shaped client",
         );
     }
 
     let latestSnapshot: BudgetSnapshot | null = null;
+    // Track the previously returned Decision by reference. The underlying
+    // `LRUCache` hands back the same Entry value on cache hits, so identity
+    // equality is a faithful "fresh fetch vs cache hit" signal: writing
+    // `latestSnapshot` on every lookup would rewrite the same headroom data
+    // and let consumers observe a phantom update mid-process.
+    let lastDecision: Decision | null = null;
     const snapshotTap: DecisionLookup = {
         async fetchDecision(tags: Tags, intent?: CallIntent): Promise<Decision | null> {
             const decision = await core.decision.fetchDecision(tags, intent);
-            if (decision !== null) {
+            if (decision !== null && decision !== lastDecision) {
                 const next = toBudgetSnapshot(decision);
                 if (next !== null) latestSnapshot = next;
+                lastDecision = decision;
             }
             return decision;
         },
     };
 
-    const leaves = new Map<string, unknown>();
+    // Use an array (not a Map) so duplicate paths in the manifest reach
+    // buildProxy intact — buildProxy throws on collision instead of letting
+    // Map's key dedup silently drop one of the wrappers.
+    const leaves: [string, unknown][] = [];
     for (const spec of manifest.methods) {
         const target = resolvePath(client, spec.path);
         if (target === undefined) {
@@ -88,10 +104,10 @@ export function wrap<T extends object>(
                 `[bursora] wrap(${manifest.provider}): missing required path '${spec.path.join(".")}'`,
             );
         }
-        leaves.set(
+        leaves.push([
             spec.path.join("."),
             wrapMethod(target, spec, manifest.provider, core, snapshotTap),
-        );
+        ]);
     }
 
     return buildProxy(client, {
