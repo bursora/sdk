@@ -5,8 +5,8 @@ Thanks for your interest. This is a small project; the bar to land a patch is lo
 ## Dev setup
 
 ```bash
-git clone https://github.com/vildanbina/bursora.git
-cd bursora/sdk
+git clone https://github.com/bursora/sdk.git
+cd sdk
 bun install
 ```
 
@@ -36,4 +36,4 @@ bun run check
 
 ## Bugs and feature requests
 
-Open an issue at https://github.com/vildanbina/bursora/issues. Repro snippet beats prose.
+Open an issue at https://github.com/bursora/sdk/issues. Repro snippet beats prose.

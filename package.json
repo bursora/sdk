@@ -7,8 +7,7 @@
     "homepage": "https://bursora.com",
     "repository": {
         "type": "git",
-        "url": "https://github.com/vildanbina/bursora.git",
-        "directory": "sdk"
+        "url": "https://github.com/bursora/sdk.git"
     },
     "keywords": [
         "llm",

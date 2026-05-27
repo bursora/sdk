@@ -42,4 +42,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Streaming support: chunks pass through; usage read from the terminal chunk.
 - Dual ESM + CJS build with TypeScript declarations.
 
-[0.1.0]: https://github.com/vildanbina/bursora/releases/tag/sdk-v0.1.0
+[0.1.0]: https://github.com/bursora/sdk/releases/tag/v0.1.0
