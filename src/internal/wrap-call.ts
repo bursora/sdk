@@ -17,7 +17,6 @@ import { currentTags } from "../tags";
 import type { Decision, Tags, UsageDelta, UsageTotals } from "../types";
 import type { CallIntent } from "./decision";
 import { type EventsClient, safeFlush } from "./events";
-import { acquireScopeLock, scopeKey } from "./per-scope-lock";
 
 interface CallMeta {
     readonly provider: string;
@@ -48,84 +47,61 @@ export function wrapCall<Args, Response>(
         const tags = currentTags();
         const meta = opts.extractCallMeta(args);
 
-        // Serialize the entire decide-call-record-flush sequence per scope.
-        // Without this, two concurrent calls with the same scope race: call B's
-        // decision lookup runs before call A's flush settles, and the server
-        // computes B's budget from a stale event snapshot.
-        const rawRelease = await acquireScopeLock(scopeKey(tags));
-        let released = false;
-        const releaseOnce = (): void => {
-            if (released) return;
-            released = true;
-            rawRelease();
-        };
-        // Streams transfer lock ownership to `finalize`; the outer `finally`
-        // must skip release in that case so the lock stays held through stream
-        // consumption.
-        let transferred = false;
-
-        try {
-            const decision = await opts.decisionClient.fetchDecision(tags, {
-                provider: meta.provider,
-                model: meta.model,
+        const decision = await opts.decisionClient.fetchDecision(tags, {
+            provider: meta.provider,
+            model: meta.model,
+        });
+        if (decision !== null && !decision.allow && decision.mode === "block") {
+            throw new BudgetExceededError({
+                tag: tags,
+                reason: decision.reason,
+                mode: decision.mode,
             });
-            if (decision !== null && !decision.allow && decision.mode === "block") {
-                throw new BudgetExceededError({
-                    tag: tags,
-                    reason: decision.reason,
-                    mode: decision.mode,
-                });
-            }
-
-            const startedAt = opts.now();
-            let response: Response;
-            try {
-                response = await call(args);
-            } catch (err) {
-                // Capture the original reference up-front. A buggy `record` sink
-                // could throw or mutate the error; the caller's `instanceof` and
-                // stack must survive that. Always rethrow the original.
-                const originalError = err;
-                try {
-                    emitErrored(meta, tags, opts.eventsClient, opts.now, startedAt);
-                } catch {
-                    // swallow: recording must not poison the rethrow path
-                }
-                await safeFlush(opts.eventsClient);
-                throw originalError;
-            }
-
-            if (meta.isStream) {
-                const handler = opts.createStreamHandler?.();
-                const wrapped = wrapStream<Response>(
-                    response,
-                    meta,
-                    tags,
-                    handler,
-                    opts.eventsClient,
-                    opts.now,
-                    startedAt,
-                    releaseOnce,
-                );
-                transferred = true;
-                return wrapped;
-            }
-
-            const usage = opts.extractUsage(response);
-            opts.eventsClient.record({
-                ...baseEvent(meta, tags, startedAt, opts.now()),
-                promptTokens: usage.promptTokens,
-                completionTokens: usage.completionTokens,
-                ...(usage.cacheTokens === undefined ? {} : { cacheTokens: usage.cacheTokens }),
-                ...(usage.requestId === undefined ? {} : { requestId: usage.requestId }),
-            });
-            // Await: cost must commit before next preflight so block budgets stop
-            // the next call once cumulative spend crosses the cap.
-            await safeFlush(opts.eventsClient);
-            return response;
-        } finally {
-            if (!transferred) releaseOnce();
         }
+
+        const startedAt = opts.now();
+        let response: Response;
+        try {
+            response = await call(args);
+        } catch (err) {
+            // Capture the original reference up-front. A buggy `record` sink
+            // could throw or mutate the error; the caller's `instanceof` and
+            // stack must survive that. Always rethrow the original.
+            const originalError = err;
+            try {
+                emitErrored(meta, tags, opts.eventsClient, opts.now, startedAt);
+            } catch {
+                // swallow: recording must not poison the rethrow path
+            }
+            await safeFlush(opts.eventsClient);
+            throw originalError;
+        }
+
+        if (meta.isStream) {
+            const handler = opts.createStreamHandler?.();
+            return wrapStream<Response>(
+                response,
+                meta,
+                tags,
+                handler,
+                opts.eventsClient,
+                opts.now,
+                startedAt,
+            );
+        }
+
+        const usage = opts.extractUsage(response);
+        opts.eventsClient.record({
+            ...baseEvent(meta, tags, startedAt, opts.now()),
+            promptTokens: usage.promptTokens,
+            completionTokens: usage.completionTokens,
+            ...(usage.cacheTokens === undefined ? {} : { cacheTokens: usage.cacheTokens }),
+            ...(usage.requestId === undefined ? {} : { requestId: usage.requestId }),
+        });
+        // Await: cost must commit before next preflight so block budgets stop
+        // the next call once cumulative spend crosses the cap.
+        await safeFlush(opts.eventsClient);
+        return response;
     };
 }
 
@@ -172,11 +148,8 @@ function wrapStream<Response>(
     eventsClient: EventsClient,
     now: () => number,
     startedAt: number,
-    releaseLock: () => void,
 ): Response {
     if (!isAsyncIterable<unknown>(source)) {
-        // Throw before lock transfer. wrapCall's outer `finally` runs with
-        // `transferred = false` and releases the scope.
         throw new TypeError(
             `bursora: ${meta.provider}.${meta.model} was wrapped as a stream but the provider returned a non-iterable value`,
         );
@@ -191,21 +164,17 @@ function wrapStream<Response>(
     const finalize = async (errored: boolean): Promise<void> => {
         if (emitted) return;
         emitted = true;
-        try {
-            eventsClient.record({
-                ...baseEvent(meta, tags, startedAt, now()),
-                promptTokens: prompt,
-                completionTokens: completion,
-                ...(cache > 0 ? { cacheTokens: cache } : {}),
-                ...(requestId !== undefined ? { requestId } : {}),
-                ...(errored ? { errored: true } : {}),
-            });
-            // Symmetric with the non-stream path: cost must commit before next
-            // call's preflight so block budgets stop the next call at the cap.
-            await safeFlush(eventsClient);
-        } finally {
-            releaseLock();
-        }
+        eventsClient.record({
+            ...baseEvent(meta, tags, startedAt, now()),
+            promptTokens: prompt,
+            completionTokens: completion,
+            ...(cache > 0 ? { cacheTokens: cache } : {}),
+            ...(requestId !== undefined ? { requestId } : {}),
+            ...(errored ? { errored: true } : {}),
+        });
+        // Symmetric with the non-stream path: cost must commit before next
+        // call's preflight so block budgets stop the next call at the cap.
+        await safeFlush(eventsClient);
     };
 
     const wrapper = {

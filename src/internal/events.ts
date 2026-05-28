@@ -93,6 +93,7 @@ export interface EventsClientOptions {
 }
 
 const INGEST_UNAVAILABLE = "bursora_ingest_unavailable";
+const INGEST_PRICING_UNKNOWN = "bursora_pricing_unknown";
 const SETUP_ERROR_UNAVAILABLE = "bursora_setup_error_unavailable";
 const DEFAULT_INGEST_TIMEOUT_MS = 5000;
 const MAX_PENDING_SETUP_ERRORS = 256;
@@ -128,7 +129,12 @@ export function createEventsClient(opts: EventsClientOptions): ManagedEventsClie
     }
     const timeoutMs = opts.ingestTimeoutMs ?? DEFAULT_INGEST_TIMEOUT_MS;
 
-    const postJson = async (target: string, body: string, logFn: LogFn, logKey: string) => {
+    const postJson = async (
+        target: string,
+        body: string,
+        logFn: LogFn,
+        logKey: string,
+    ): Promise<HttpResult> => {
         const result = await transport.send({
             method: "POST",
             url: target,
@@ -140,6 +146,30 @@ export function createEventsClient(opts: EventsClientOptions): ManagedEventsClie
             timeoutMs,
         });
         if (!result.ok) logTransportFailure(logFn, logKey, result);
+        return result;
+    };
+
+    // The ingest endpoint accepts the batch (202) even when some events name a
+    // provider/model with no pricing row: the priced events still persist and
+    // the response lists the unpriced pairs. Surface them so the SDK author
+    // sees which model needs a price; the priced spend is unaffected.
+    const reportUnpriced = async (result: HttpResult): Promise<void> => {
+        let parsed: unknown;
+        try {
+            parsed = await result.json();
+        } catch {
+            return;
+        }
+        if (typeof parsed !== "object" || parsed === null) return;
+        const unpriced = (parsed as { unpriced?: unknown }).unpriced;
+        if (!Array.isArray(unpriced)) return;
+        for (const entry of unpriced) {
+            if (typeof entry !== "object" || entry === null) continue;
+            const { provider, model } = entry as { provider?: unknown; model?: unknown };
+            if (typeof provider === "string" && typeof model === "string") {
+                log(INGEST_PRICING_UNKNOWN, { category: "pricing_unknown", provider, model });
+            }
+        }
     };
 
     // Tracks in-flight `recordSetupError` POSTs so `flush()` (and the
@@ -172,7 +202,13 @@ export function createEventsClient(opts: EventsClientOptions): ManagedEventsClie
                     log(INGEST_UNAVAILABLE, { category: "invalid_config", error: urlError });
                 } else {
                     const events = queue.splice(0, queue.length);
-                    await postJson(url, JSON.stringify({ events }), log, INGEST_UNAVAILABLE);
+                    const result = await postJson(
+                        url,
+                        JSON.stringify({ events }),
+                        log,
+                        INGEST_UNAVAILABLE,
+                    );
+                    if (result.ok) await reportUnpriced(result);
                 }
             }
             evictExpiredSetupErrors();
@@ -201,7 +237,10 @@ export function createEventsClient(opts: EventsClientOptions): ManagedEventsClie
                 JSON.stringify({ kind: input.kind }),
                 setupErrorLog,
                 SETUP_ERROR_UNAVAILABLE,
-            ).catch(() => {});
+            ).then(
+                () => {},
+                () => {},
+            );
             pendingSetupErrors.set(p, now());
             void p.finally(() => pendingSetupErrors.delete(p));
         },

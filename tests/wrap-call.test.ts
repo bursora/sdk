@@ -499,111 +499,98 @@ describe("wrapCall — streaming", () => {
     });
 });
 
-describe("wrapCall — per-scope flush serialization", () => {
-    test("second concurrent call's decision lookup observes the first call's flushed event", async () => {
-        // Two concurrent calls on the same scope race. Without serialization,
-        // call B's decision lookup runs before call A's flush settles; the
-        // server then computes B's budget from a stale snapshot.
-        let flushedCount = 0;
-        const decisionFlushSnapshots: number[] = [];
-        const events: RecordedEvent[] = [];
-
-        const decisionClient = {
-            fetchDecision: async (_tags: Record<string, string | undefined>) => {
-                decisionFlushSnapshots.push(flushedCount);
-                return ALLOW;
-            },
+describe("wrapCall — concurrency (no per-scope serialization)", () => {
+    const blockingProvider = () => {
+        let maxActive = 0;
+        let active = 0;
+        let release: () => void = () => {};
+        const gate = new Promise<void>((res) => {
+            release = res;
+        });
+        const call = async (_args: FakeArgs): Promise<FakeResponse> => {
+            active += 1;
+            maxActive = Math.max(maxActive, active);
+            await gate;
+            active -= 1;
+            return { id: "r1", usage: { prompt_tokens: 1, completion_tokens: 1 } };
         };
-        const eventsClient = {
-            record: (event: RecordedEvent) => {
-                events.push(event);
-            },
-            flush: async () => {
-                // Yield a couple of microtasks so a concurrent caller has a
-                // real chance to interleave past us — emulates real network
-                // POST latency without timers.
-                await Promise.resolve();
-                await Promise.resolve();
-                flushedCount += 1;
-            },
-        };
+        return { call, release: () => release(), maxActive: () => maxActive };
+    };
 
-        const wrapped = wrapCall(
-            async (_args: FakeArgs) =>
-                ({
-                    id: "r1",
-                    usage: { prompt_tokens: 1, completion_tokens: 1 },
-                }) satisfies FakeResponse,
+    test("untagged calls run concurrently (no global lock collapse)", async () => {
+        // scopeKey for untagged calls used to be "||" — the old per-scope lock
+        // collapsed ALL untagged traffic onto one global mutex, serializing the
+        // default path. Untagged calls must now overlap.
+        const h = buildHarness({});
+        const provider = blockingProvider();
+        const wrapped = wrapCall(provider.call, {
+            extractCallMeta,
+            extractUsage,
+            decisionClient: h.decisionClient,
+            eventsClient: h.eventsClient,
+            now: () => 1_000,
+        });
+
+        // No withTags → untagged.
+        const both = Promise.all([wrapped({ model: "gpt-4o" }), wrapped({ model: "gpt-4o" })]);
+        await new Promise((res) => setTimeout(res, 0));
+        expect(provider.maxActive()).toBe(2);
+        provider.release();
+        await both;
+    });
+
+    test("same-scope calls are not serialized across the provider call", async () => {
+        // The old lock was held across decide→call→record→flush, so a second
+        // same-scope call could not enter its provider call until the first
+        // fully drained. Both providers must now be in-flight at once.
+        const h = buildHarness({});
+        const provider = blockingProvider();
+        const wrapped = wrapCall(provider.call, {
+            extractCallMeta,
+            extractUsage,
+            decisionClient: h.decisionClient,
+            eventsClient: h.eventsClient,
+            now: () => 1_000,
+        });
+
+        await withTags({ tenant_id: "acme" }, async () => {
+            const both = Promise.all([wrapped({ model: "gpt-4o" }), wrapped({ model: "gpt-4o" })]);
+            await new Promise((res) => setTimeout(res, 0));
+            expect(provider.maxActive()).toBe(2);
+            provider.release();
+            await both;
+        });
+    });
+
+    test("an unconsumed stream does not block later same-scope calls", async () => {
+        // The old lock transferred to the stream's finalize step and only
+        // released on iterator done/return/throw. A stream obtained but never
+        // iterated held the lock forever, deadlocking every later same-scope
+        // call. The later call must now complete.
+        const h = buildHarness({});
+        async function* producer() {
+            yield { usage: { prompt_tokens: 1, completion_tokens: 1 } };
+        }
+        const wrapped = wrapCall<FakeArgs, FakeResponse>(
+            async (args: FakeArgs) =>
+                args.stream === true
+                    ? (producer() as unknown as FakeResponse)
+                    : ({ id: "r1", usage: { prompt_tokens: 1, completion_tokens: 1 } } satisfies FakeResponse),
             {
                 extractCallMeta,
                 extractUsage,
-                decisionClient,
-                eventsClient,
+                createStreamHandler: () => () => null,
+                decisionClient: h.decisionClient,
+                eventsClient: h.eventsClient,
                 now: () => 1_000,
             },
         );
 
         await withTags({ tenant_id: "acme" }, async () => {
-            await Promise.all([wrapped({ model: "gpt-4o" }), wrapped({ model: "gpt-4o" })]);
+            // Obtain a stream but never iterate or close it.
+            await wrapped({ model: "gpt-4o", stream: true });
+            const out = await wrapped({ model: "gpt-4o" });
+            expect(out.id).toBe("r1");
         });
-
-        expect(decisionFlushSnapshots).toHaveLength(2);
-        expect(events).toHaveLength(2);
-        // First call runs before any flush has completed.
-        expect(decisionFlushSnapshots[0]).toBe(0);
-        // Second call must see the first call's flush already settled.
-        expect(decisionFlushSnapshots[1]).toBe(1);
-    });
-
-    test("does not serialize across different scopes", async () => {
-        // Lock is scoped per tenant/agent/workflow. Concurrent calls on
-        // different scopes must proceed in parallel — otherwise per-call
-        // latency stacks linearly across unrelated tenants.
-        const startedDecisions: string[] = [];
-        const resolveDecision: Record<string, () => void> = {};
-        const decisionClient = {
-            fetchDecision: async (tags: Record<string, string | undefined>) => {
-                const key = tags.tenant_id ?? "";
-                startedDecisions.push(key);
-                // Block until the test releases this scope.
-                await new Promise<void>((res) => {
-                    resolveDecision[key] = res;
-                });
-                return ALLOW;
-            },
-        };
-        const eventsClient = {
-            record: () => {},
-            flush: async () => {},
-        };
-
-        const wrapped = wrapCall(
-            async (_args: FakeArgs) =>
-                ({
-                    id: "r1",
-                    usage: { prompt_tokens: 1, completion_tokens: 1 },
-                }) satisfies FakeResponse,
-            {
-                extractCallMeta,
-                extractUsage,
-                decisionClient,
-                eventsClient,
-                now: () => 1_000,
-            },
-        );
-
-        const a = withTags({ tenant_id: "acme" }, async () => wrapped({ model: "gpt-4o" }));
-        const b = withTags({ tenant_id: "globex" }, async () => wrapped({ model: "gpt-4o" }));
-        // Let both calls reach the blocked decision fetch.
-        await Promise.resolve();
-        await Promise.resolve();
-        await Promise.resolve();
-
-        // Both scopes must be in-flight in parallel; the lock is per-scope.
-        expect(startedDecisions.sort()).toEqual(["acme", "globex"]);
-
-        resolveDecision.acme?.();
-        resolveDecision.globex?.();
-        await Promise.all([a, b]);
     });
 });

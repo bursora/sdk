@@ -54,6 +54,15 @@ const mockFetchThrow = (calls: MockCall[]): typeof fetch =>
         return Promise.reject(new Error("network"));
     }) as unknown as typeof fetch;
 
+const mockFetchBody = (body: unknown, status = 202): typeof fetch =>
+    (() =>
+        Promise.resolve(
+            new Response(JSON.stringify(body), {
+                status,
+                headers: { "content-type": "application/json" },
+            }),
+        )) as unknown as typeof fetch;
+
 describe("eventsClient", () => {
     test("flush() POSTs /api/v1/events with X-Bursora-Key only (no signature)", async () => {
         const calls: MockCall[] = [];
@@ -312,6 +321,61 @@ describe("eventsClient", () => {
         expect(calls).toHaveLength(0);
         expect(logs[0]?.msg).toBe("bursora_ingest_unavailable");
         expect(logs[0]?.meta?.category).toBe("invalid_config");
+    });
+
+    test("flush() surfaces unpriced models from the 202 body", async () => {
+        const logs: { msg: string; meta: Record<string, unknown> | undefined }[] = [];
+        const client = createEventsClient({
+            endpoint: "https://app.bursora.com",
+            apiKey: API_KEY,
+            fetch: mockFetchBody({
+                status: "accepted",
+                unpriced: [{ provider: "openai", model: "gpt-7-unreleased" }],
+            }),
+            log: (msg, meta) => logs.push({ msg, meta }),
+        });
+        client.record(baseEvent);
+        await client.flush();
+        const hit = logs.find((l) => l.msg === "bursora_pricing_unknown");
+        expect(hit?.meta?.category).toBe("pricing_unknown");
+        expect(hit?.meta?.provider).toBe("openai");
+        expect(hit?.meta?.model).toBe("gpt-7-unreleased");
+    });
+
+    test("flush() emits no pricing log on a clean 202", async () => {
+        const logs: string[] = [];
+        const client = createEventsClient({
+            endpoint: "https://app.bursora.com",
+            apiKey: API_KEY,
+            fetch: mockFetchBody({ status: "accepted" }),
+            log: (m) => logs.push(m),
+        });
+        client.record(baseEvent);
+        await client.flush();
+        expect(logs).not.toContain("bursora_pricing_unknown");
+    });
+
+    test("default surface prints the unpriced model name", async () => {
+        const warnings: string[] = [];
+        const originalWarn = console.warn;
+        console.warn = (msg: unknown) => {
+            warnings.push(String(msg));
+        };
+        try {
+            const client = createEventsClient({
+                endpoint: "https://app.bursora.com",
+                apiKey: API_KEY,
+                fetch: mockFetchBody({
+                    status: "accepted",
+                    unpriced: [{ provider: "anthropic", model: "claude-99" }],
+                }),
+            });
+            client.record(baseEvent);
+            await client.flush();
+        } finally {
+            console.warn = originalWarn;
+        }
+        expect(warnings.some((w) => w.includes("anthropic/claude-99"))).toBe(true);
     });
 
     test("default surface categorizes 5xx as server_error", async () => {
