@@ -8,7 +8,6 @@
 
 import { describe, expect, test } from "bun:test";
 import { currentTags, withTags } from "../src/tags";
-import type { Tags } from "../src/types";
 
 describe("withTags", () => {
     test("returns empty tags outside a scope", () => {
@@ -64,16 +63,11 @@ describe("withTags", () => {
         ).rejects.toThrow("boom");
     });
 
-    test("returned tags are a deep clone — nested mutations don't leak into ALS", async () => {
-        // Forward-looking shape: Tags is flat today, but the contract must
-        // survive future nested fields (e.g. tenant.id) without leaking.
-        const nestedTags = { tenant: { id: "acme" }, agent_id: "support" } as unknown as Tags;
-        await withTags(nestedTags, async () => {
-            const first = currentTags() as unknown as { tenant: { id: string } };
-            first.tenant.id = "mutated";
-
-            const second = currentTags() as unknown as { tenant: { id: string } };
-            expect(second.tenant.id).toBe("acme");
+    test("returned tags are a copy — mutations don't leak into ALS", async () => {
+        await withTags({ tenant_id: "acme" }, async () => {
+            const first = currentTags();
+            (first as { tenant_id?: string }).tenant_id = "mutated";
+            expect(currentTags().tenant_id).toBe("acme");
         });
     });
 });

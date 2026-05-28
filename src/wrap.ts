@@ -101,40 +101,26 @@ export function wrap<T extends object>(
     // buildProxy intact — buildProxy throws on collision instead of letting
     // Map's key dedup silently drop one of the wrappers.
     const leaves: [string, unknown][] = [];
-    const requiredPaths = new Set<string>();
     for (const spec of manifest.methods) {
-        const path = spec.path.join(".");
-        if (spec.optional !== true) requiredPaths.add(path);
         const target = resolvePath(client, spec.path);
-        if (target === undefined) {
-            if (spec.optional === true) continue;
-            // Required path missing on the client (older SDK version, custom
-            // shape, etc). Install a no-op leaf so `buildProxy` can synthesize
-            // the missing branch; the warn is emitted once by `buildProxy`
-            // from the `requiredPaths` set above. Behavior preserved for one
-            // minor; the next minor throws instead. See `BuildProxyOptions.requiredPaths`.
-            leaves.push([path, noopFallback]);
-            continue;
-        }
-        leaves.push([path, wrapMethod(target, spec, manifest.provider, core, snapshotTap)]);
+        // A missing path here is always an optional one: `detect` is
+        // `structurallyMatches` over this same method list, so every required
+        // path is guaranteed present or the manifest never matched.
+        if (target === undefined) continue;
+        leaves.push([
+            spec.path.join("."),
+            wrapMethod(target, spec, manifest.provider, core, snapshotTap),
+        ]);
     }
 
     return buildProxy(client, {
         leaves,
-        requiredPaths,
         lifecycle: {
             flush: () => safeFlush(core.events),
             dispose: () => core.events.dispose?.(),
             readBudget: () => latestSnapshot,
         },
     }) as Wrapped<T>;
-}
-
-// Placeholder for required method paths that aren't present on the wrapped
-// client. Calling it returns `undefined` so older client shapes don't crash
-// init or downstream call sites that probe for the method.
-function noopFallback(): undefined {
-    return undefined;
 }
 
 function toBudgetSnapshot(decision: Decision): BudgetSnapshot | null {
