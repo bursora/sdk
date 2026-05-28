@@ -103,16 +103,6 @@ Fix: confirm the import is the official `openai` or `@anthropic-ai/sdk` package,
 
 A setup-error POST also lands on the dashboard so the workspace admin sees the misconfiguration.
 
-### Missing required path
-
-```
-Error: [bursora] wrap(openai): missing required path 'chat.completions.create'
-```
-
-Cause: you passed an OpenAI-shaped client missing `chat.completions.create` (the required method). Almost always a version mismatch.
-
-Fix: upgrade to a recent `openai` package; the SDK targets the modern shape (≥ v4).
-
 ### Missing options
 
 ```
@@ -133,6 +123,18 @@ bursora:ingest bursora_ingest_unavailable {"category":"invalid_config","error":"
 ```
 
 Fix: `endpoint` must be a full origin: `https://app.bursora.com`. No path, no trailing slash needed.
+
+## Init warnings (not thrown)
+
+### Missing required method
+
+```
+[bursora-sdk] missing required method chat.completions.create; using no-op fallback
+```
+
+Cause: the wrapped client is missing a method the manifest expects (a version mismatch on the provider SDK, or a custom shape). `wrap()` returns successfully and substitutes a no-op so callers don't crash; calling the missing method returns `undefined`.
+
+Fix: upgrade the provider SDK (e.g. `openai` ≥ v4) so the expected method is present. The no-op fallback is a deprecation window — a future minor release replaces it with a hard throw.
 
 ## HTTP errors (not thrown)
 

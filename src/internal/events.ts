@@ -3,6 +3,14 @@
 import { createDefaultLog, type LogFn } from "./default-log";
 import { createTransport, serializeError, type HttpResult } from "./transport";
 
+/**
+ * One usage event recorded into the events queue. Matches the per-record
+ * shape on the wire body of `/api/v1/events`. Customers building a custom
+ * `EventsQueue` receive this on `record()` and should treat it as opaque
+ * (do not mutate; keep ordering).
+ *
+ * @public
+ */
 export interface EventInput {
     readonly provider: string;
     readonly model: string;
@@ -38,6 +46,15 @@ export interface EventsClient {
 }
 
 /**
+ * Public-facing alias for `EventsClient` — the buffered batch sink that
+ * `createBursora` records usage to. Same structural shape; the alias exists so
+ * the public API uses "queue" terminology consistently with the docs.
+ *
+ * @public
+ */
+export type EventsQueue = EventsClient;
+
+/**
  * Factory-built EventsClient. The SDK-built client always provides `dispose`
  * and `recordSetupError`; the base `EventsClient` keeps them optional only so
  * external/test sinks can omit them. Internal callers should accept this type
@@ -57,6 +74,14 @@ export async function safeFlush(sink: Pick<EventsClient, "flush">): Promise<void
     }
 }
 
+/**
+ * Construction inputs for the default `EventsQueue` factory. Most callers
+ * never see this — they pass `apiKey` + `endpoint` to `createBursora` and let
+ * it build the default. Reach for `createEventsQueue` directly when you need
+ * to inject a `fetch` implementation or tune the ingest timeout.
+ *
+ * @public
+ */
 export interface EventsClientOptions {
     readonly endpoint: string;
     readonly apiKey: string;
@@ -191,6 +216,15 @@ export function createEventsClient(opts: EventsClientOptions): ManagedEventsClie
     registerClient(client);
     return client;
 }
+
+/**
+ * Public-facing alias for `createEventsClient`. The public API uses "queue"
+ * terminology; this re-export keeps the docs and customer code consistent
+ * while internal call sites continue to use `createEventsClient`.
+ *
+ * @public
+ */
+export const createEventsQueue = createEventsClient;
 
 // Shared `beforeExit` listener + WeakRef registry so HMR / repeat-wrap cycles
 // don't leak listeners and don't pin discarded clients alive for the process.

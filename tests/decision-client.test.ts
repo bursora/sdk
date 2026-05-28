@@ -171,6 +171,89 @@ describe("decisionClient.fetchDecision", () => {
         expect(calls).toHaveLength(2);
     });
 
+    test("cached allow from cheap model is reused for an expensive model on the same scope", async () => {
+        // Allow-mode cache stays intent-agnostic: a workspace under budget
+        // stays under budget regardless of which model the next call targets,
+        // so re-using the cached allow avoids a needless refetch on model
+        // swaps and keeps the hit rate high for the common path.
+        const calls: MockCall[] = [];
+        const client = createDecisionClient({
+            endpoint: "https://app.bursora.com",
+            apiKey: "k",
+            cacheCapacity: 8,
+            now: () => 0,
+            fetch: mockFetchOk(ALLOW_DECISION, calls),
+        });
+        await client.fetchDecision(
+            { tenant_id: "acme" },
+            { provider: "openai", model: "gpt-4o-mini" },
+        );
+        await client.fetchDecision(
+            { tenant_id: "acme" },
+            { provider: "openai", model: "gpt-4o" },
+        );
+        expect(calls).toHaveLength(1);
+    });
+
+    test("cached block from cheap model does NOT satisfy an expensive model on the same scope", async () => {
+        // Block-mode cache must be intent-aware. Reusing a cheap-model block
+        // verdict (or the prior allow at the same scope) for an expensive call
+        // can under- or over-block: per-model budgets and the spend delta of
+        // the expensive call may flip the decision. Force a refetch instead.
+        const calls: MockCall[] = [];
+        const blockDecision: Decision = {
+            allow: false,
+            mode: "block",
+            reason: "workspace:*:over:25/10",
+            ttl_s: 10,
+        };
+        const client = createDecisionClient({
+            endpoint: "https://app.bursora.com",
+            apiKey: "k",
+            cacheCapacity: 8,
+            now: () => 0,
+            fetch: mockFetchOk(blockDecision, calls),
+        });
+        await client.fetchDecision(
+            { tenant_id: "acme" },
+            { provider: "openai", model: "gpt-4o-mini" },
+        );
+        await client.fetchDecision(
+            { tenant_id: "acme" },
+            { provider: "openai", model: "gpt-4o" },
+        );
+        expect(calls).toHaveLength(2);
+    });
+
+    test("cached block hits cache when the same model is queried again", async () => {
+        // Sanity check for the model-aware block path: the same (scope, intent)
+        // pair must still hit cache so a workspace blocked on gpt-4o keeps
+        // returning the cached block until ttl_s expires.
+        const calls: MockCall[] = [];
+        const blockDecision: Decision = {
+            allow: false,
+            mode: "block",
+            reason: "workspace:*:over:25/10",
+            ttl_s: 10,
+        };
+        const client = createDecisionClient({
+            endpoint: "https://app.bursora.com",
+            apiKey: "k",
+            cacheCapacity: 8,
+            now: () => 0,
+            fetch: mockFetchOk(blockDecision, calls),
+        });
+        await client.fetchDecision(
+            { tenant_id: "acme" },
+            { provider: "openai", model: "gpt-4o" },
+        );
+        await client.fetchDecision(
+            { tenant_id: "acme" },
+            { provider: "openai", model: "gpt-4o" },
+        );
+        expect(calls).toHaveLength(1);
+    });
+
     test("returns null and does not throw on 5xx (fail open)", async () => {
         const calls: MockCall[] = [];
         const logs: string[] = [];

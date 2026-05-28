@@ -25,7 +25,9 @@ import { deepseekAnthropicManifest, deepseekOpenaiManifest } from "./providers/d
 import { openaiManifest } from "./providers/openai";
 import type { BudgetSnapshot, Decision, MethodSpec, ProviderManifest, Tags } from "./types";
 
+/** @internal SDK internals; not part of the stable public API. */
 export type { EventsClient, SetupErrorInput, SetupErrorKind } from "./internal/events";
+/** @internal SDK internals; not part of the stable public API. */
 export type { DecisionLookup, StreamChunkHandler } from "./internal/wrap-call";
 export type { BudgetSnapshot, UsageDelta } from "./types";
 
@@ -58,7 +60,10 @@ export function wrap<T extends object>(
     client: T,
     optsOrCore: BursoraCore | BursoraOptions,
 ): Wrapped<T> {
-    const core = "apiKey" in optsOrCore ? createBursora(optsOrCore) : optsOrCore;
+    // `now` is on every BursoraCore and never on BursoraOptions (which uses
+    // `clock`), so its presence distinguishes the two even when `apiKey` and
+    // `endpoint` are absent (the custom-adapters path).
+    const core = "now" in optsOrCore ? optsOrCore : createBursora(optsOrCore);
     const manifest = MANIFESTS.find((m) => m.detect(client)) ?? null;
     if (manifest === null) {
         // Guard with `typeof === 'function'` rather than `?.` so a custom
@@ -96,28 +101,40 @@ export function wrap<T extends object>(
     // buildProxy intact — buildProxy throws on collision instead of letting
     // Map's key dedup silently drop one of the wrappers.
     const leaves: [string, unknown][] = [];
+    const requiredPaths = new Set<string>();
     for (const spec of manifest.methods) {
+        const path = spec.path.join(".");
+        if (spec.optional !== true) requiredPaths.add(path);
         const target = resolvePath(client, spec.path);
         if (target === undefined) {
             if (spec.optional === true) continue;
-            throw new Error(
-                `[bursora] wrap(${manifest.provider}): missing required path '${spec.path.join(".")}'`,
-            );
+            // Required path missing on the client (older SDK version, custom
+            // shape, etc). Install a no-op leaf so `buildProxy` can synthesize
+            // the missing branch; the warn is emitted once by `buildProxy`
+            // from the `requiredPaths` set above. Behavior preserved for one
+            // minor; the next minor throws instead. See `BuildProxyOptions.requiredPaths`.
+            leaves.push([path, noopFallback]);
+            continue;
         }
-        leaves.push([
-            spec.path.join("."),
-            wrapMethod(target, spec, manifest.provider, core, snapshotTap),
-        ]);
+        leaves.push([path, wrapMethod(target, spec, manifest.provider, core, snapshotTap)]);
     }
 
     return buildProxy(client, {
         leaves,
+        requiredPaths,
         lifecycle: {
             flush: () => safeFlush(core.events),
             dispose: () => core.events.dispose?.(),
             readBudget: () => latestSnapshot,
         },
     }) as Wrapped<T>;
+}
+
+// Placeholder for required method paths that aren't present on the wrapped
+// client. Calling it returns `undefined` so older client shapes don't crash
+// init or downstream call sites that probe for the method.
+function noopFallback(): undefined {
+    return undefined;
 }
 
 function toBudgetSnapshot(decision: Decision): BudgetSnapshot | null {
