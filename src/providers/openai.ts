@@ -8,7 +8,7 @@
  */
 
 import { structurallyMatches } from "../internal/detect";
-import type { MethodSpec, ProviderManifest, UsageTotals } from "../types";
+import type { MethodSpec, ProviderManifest, UsageDelta, UsageTotals } from "../types";
 
 interface ChatArgs {
     readonly model: string;
@@ -97,16 +97,48 @@ function embeddingsUsage(response: EmbeddingsResponse): ManifestUsage {
     };
 }
 
-function streamUsage(chunk: OpenAIStreamChunk) {
-    const u = chunk.usage;
-    if (!u && chunk.id === undefined) return null;
-    const cached = u?.prompt_tokens_details?.cached_tokens;
-    const totalPrompt = u?.prompt_tokens ?? 0;
-    return {
-        promptTokensDelta: totalPrompt - (cached ?? 0),
-        completionTokensDelta: u?.completion_tokens ?? 0,
-        ...(cached !== undefined ? { cacheTokensDelta: cached } : {}),
-        ...(chunk.id !== undefined ? { requestId: chunk.id } : {}),
+// OpenAI typically reports `usage` once on a terminal stream chunk, but a
+// chunk can legitimately carry `cached_tokens` without `prompt_tokens`. The
+// handler tracks the latest seen totals across the stream and emits deltas
+// relative to the previously emitted totals so the engine's sum-of-deltas
+// matches the final correct values. Subtracting cache per chunk (instead of
+// at stream end) would underflow promptTokens when a cache-only chunk arrives
+// before any prompt_tokens chunk.
+export function createOpenAIStreamHandler(): (chunk: unknown) => UsageDelta | null {
+    let promptTotal = 0;
+    let completionTotal = 0;
+    let cacheTotal = 0;
+    let lastEmittedPromptUncached = 0;
+    let lastEmittedCompletion = 0;
+    let lastEmittedCache = 0;
+    let requestId: string | undefined;
+
+    return (raw: unknown) => {
+        const chunk = raw as OpenAIStreamChunk;
+        if (requestId === undefined && chunk.id !== undefined) requestId = chunk.id;
+        const u = chunk.usage;
+        if (!u && chunk.id === undefined) return null;
+
+        if (u?.prompt_tokens !== undefined) promptTotal = u.prompt_tokens;
+        if (u?.completion_tokens !== undefined) completionTotal = u.completion_tokens;
+        if (u?.prompt_tokens_details?.cached_tokens !== undefined) {
+            cacheTotal = u.prompt_tokens_details.cached_tokens;
+        }
+
+        const promptUncached = Math.max(0, promptTotal - cacheTotal);
+        const promptDelta = promptUncached - lastEmittedPromptUncached;
+        const completionDelta = completionTotal - lastEmittedCompletion;
+        const cacheDelta = cacheTotal - lastEmittedCache;
+        lastEmittedPromptUncached = promptUncached;
+        lastEmittedCompletion = completionTotal;
+        lastEmittedCache = cacheTotal;
+
+        return {
+            promptTokensDelta: promptDelta,
+            completionTokensDelta: completionDelta,
+            ...(cacheDelta !== 0 ? { cacheTokensDelta: cacheDelta } : {}),
+            ...(requestId !== undefined ? { requestId } : {}),
+        };
     };
 }
 
@@ -119,7 +151,7 @@ const chatCompletionsCreate: MethodSpec<ChatArgs, ChatResponse, OpenAIStreamChun
     path: ["chat", "completions", "create"],
     extractMeta: chatMeta,
     extractUsage: (res) => chatUsage(res as ChatResponse),
-    createStreamHandler: () => (chunk) => streamUsage(chunk as OpenAIStreamChunk),
+    createStreamHandler: createOpenAIStreamHandler,
 };
 
 const responsesCreate: MethodSpec<ResponsesArgs, ResponsesResponse, OpenAIStreamChunk> = {
@@ -130,7 +162,7 @@ const responsesCreate: MethodSpec<ResponsesArgs, ResponsesResponse, OpenAIStream
         return { model: a.model, isStream: a.stream === true };
     },
     extractUsage: (res) => responsesUsage(res as ResponsesResponse),
-    createStreamHandler: () => (chunk) => streamUsage(chunk as OpenAIStreamChunk),
+    createStreamHandler: createOpenAIStreamHandler,
 };
 
 const embeddingsCreate: MethodSpec<EmbeddingsArgs, EmbeddingsResponse> = {

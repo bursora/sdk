@@ -25,14 +25,19 @@ export interface ProxyLifecycle {
 }
 
 export interface BuildProxyOptions {
-    /** Map of dotted leaf paths to their replacement function. */
-    readonly leaves: ReadonlyMap<string, unknown>;
+    /**
+     * Dotted leaf paths paired with their replacement function. Accepted as an
+     * iterable of tuples (not a Map) so duplicate paths surface as errors
+     * instead of being silently coalesced by Map's key dedup.
+     */
+    readonly leaves: Iterable<readonly [string, unknown]>;
     /** Root-level lifecycle hooks to graft when absent on target. */
     readonly lifecycle: ProxyLifecycle;
 }
 
 export function buildProxy<T extends object>(target: T, opts: BuildProxyOptions): T {
-    const tree = buildSubtree(target, opts.leaves, []);
+    const leaves = collectLeaves(opts.leaves);
+    const tree = buildSubtree(target, leaves, []);
     return new Proxy(target, {
         get(t, prop, receiver) {
             if (typeof prop === "string") {
@@ -44,6 +49,25 @@ export function buildProxy<T extends object>(target: T, opts: BuildProxyOptions)
             return Reflect.get(t, prop, receiver);
         },
     });
+}
+
+// Materialize the leaves iterable into a Map and surface duplicate paths as
+// an error instead of silently letting the later entry win. A typo in a
+// provider manifest that points two MethodSpecs at the same path would
+// otherwise no-op one of them with no signal.
+function collectLeaves(
+    entries: Iterable<readonly [string, unknown]>,
+): ReadonlyMap<string, unknown> {
+    const seen = new Set<string>();
+    const out = new Map<string, unknown>();
+    for (const [path, fn] of entries) {
+        if (seen.has(path)) {
+            throw new Error(`buildProxy: duplicate method path '${path}' in manifest`);
+        }
+        seen.add(path);
+        out.set(path, fn);
+    }
+    return out;
 }
 
 interface SubtreeNode {
@@ -64,11 +88,14 @@ function buildSubtree(
     const out = new Map<string, unknown>();
     for (const [segment, node] of nodes) {
         const child = readChild(target, segment);
-        if (child === undefined) continue;
         if (node.leaf !== undefined && node.children.size === 0) {
-            out.set(segment, node.leaf);
+            // Pure leaf at this segment. Install only when present on the
+            // target; missing leaves keep the skip-silently behavior so the
+            // proxy doesn't shadow absent client surfaces.
+            if (child !== undefined) out.set(segment, node.leaf);
             continue;
         }
+        if (child === undefined) continue;
         const nestedTarget = child as object;
         const nested = buildSubtree(nestedTarget, leaves, [...prefix, segment]);
         out.set(segment, wrapSegmentProxy(nestedTarget, nested));

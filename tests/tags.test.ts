@@ -62,4 +62,12 @@ describe("withTags", () => {
             }),
         ).rejects.toThrow("boom");
     });
+
+    test("returned tags are a copy — mutations don't leak into ALS", async () => {
+        await withTags({ tenant_id: "acme" }, async () => {
+            const first = currentTags();
+            (first as { tenant_id?: string }).tenant_id = "mutated";
+            expect(currentTags().tenant_id).toBe("acme");
+        });
+    });
 });

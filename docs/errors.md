@@ -103,16 +103,6 @@ Fix: confirm the import is the official `openai` or `@anthropic-ai/sdk` package,
 
 A setup-error POST also lands on the dashboard so the workspace admin sees the misconfiguration.
 
-### Missing required path
-
-```
-Error: [bursora] wrap(openai): missing required path 'chat.completions.create'
-```
-
-Cause: you passed an OpenAI-shaped client missing `chat.completions.create` (the required method). Almost always a version mismatch.
-
-Fix: upgrade to a recent `openai` package; the SDK targets the modern shape (≥ v4).
-
 ### Missing options
 
 ```

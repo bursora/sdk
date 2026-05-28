@@ -64,9 +64,17 @@ export function wrapCall<Args, Response>(
         try {
             response = await call(args);
         } catch (err) {
-            emitErrored(meta, tags, opts.eventsClient, opts.now, startedAt);
+            // Capture the original reference up-front. A buggy `record` sink
+            // could throw or mutate the error; the caller's `instanceof` and
+            // stack must survive that. Always rethrow the original.
+            const originalError = err;
+            try {
+                emitErrored(meta, tags, opts.eventsClient, opts.now, startedAt);
+            } catch {
+                // swallow: recording must not poison the rethrow path
+            }
             await safeFlush(opts.eventsClient);
-            throw err;
+            throw originalError;
         }
 
         if (meta.isStream) {
@@ -124,6 +132,14 @@ function emitErrored(
     });
 }
 
+function isAsyncIterable<T>(x: unknown): x is AsyncIterable<T> {
+    return (
+        typeof x === "object" &&
+        x !== null &&
+        typeof (x as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator] === "function"
+    );
+}
+
 function wrapStream<Response>(
     source: Response,
     meta: CallMeta,
@@ -133,7 +149,12 @@ function wrapStream<Response>(
     now: () => number,
     startedAt: number,
 ): Response {
-    const iterable = source as unknown as AsyncIterable<unknown>;
+    if (!isAsyncIterable<unknown>(source)) {
+        throw new TypeError(
+            `bursora: ${meta.provider}.${meta.model} was wrapped as a stream but the provider returned a non-iterable value`,
+        );
+    }
+    const iterable = source;
     let prompt = 0;
     let completion = 0;
     let cache = 0;
@@ -156,7 +177,7 @@ function wrapStream<Response>(
         await safeFlush(eventsClient);
     };
 
-    const wrapper: AsyncIterable<unknown> = {
+    const wrapper = {
         [Symbol.asyncIterator](): AsyncIterator<unknown> {
             const inner = iterable[Symbol.asyncIterator]();
             return {
@@ -197,6 +218,9 @@ function wrapStream<Response>(
                 },
             };
         },
-    };
-    return wrapper as unknown as Response;
+    } satisfies AsyncIterable<unknown>;
+    // `Response` is a generic provider type the caller asserts. After the
+    // type guard above we know `source` is async-iterable, and `wrapper`
+    // structurally matches that iterable contract (validated by `satisfies`).
+    return wrapper as Response;
 }

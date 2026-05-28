@@ -3,6 +3,14 @@
 import { createDefaultLog, type LogFn } from "./default-log";
 import { createTransport, serializeError, type HttpResult } from "./transport";
 
+/**
+ * One usage event recorded into the events queue. Matches the per-record
+ * shape on the wire body of `/api/v1/events`. Customers building a custom
+ * `EventsQueue` receive this on `record()` and should treat it as opaque
+ * (do not mutate; keep ordering).
+ *
+ * @public
+ */
 export interface EventInput {
     readonly provider: string;
     readonly model: string;
@@ -37,6 +45,26 @@ export interface EventsClient {
     dispose?(): void;
 }
 
+/**
+ * Public-facing alias for `EventsClient` — the buffered batch sink that
+ * `createBursora` records usage to. Same structural shape; the alias exists so
+ * the public API uses "queue" terminology consistently with the docs.
+ *
+ * @public
+ */
+export type EventsQueue = EventsClient;
+
+/**
+ * Factory-built EventsClient. The SDK-built client always provides `dispose`
+ * and `recordSetupError`; the base `EventsClient` keeps them optional only so
+ * external/test sinks can omit them. Internal callers should accept this type
+ * to skip the optional-chain dance.
+ */
+export type ManagedEventsClient = EventsClient &
+    Required<Pick<EventsClient, "dispose" | "recordSetupError">> & {
+        readonly __pendingSetupErrorsCount: () => number;
+    };
+
 /** Top-level `flush()` is fire-and-forget; never let injected sinks reject. */
 export async function safeFlush(sink: Pick<EventsClient, "flush">): Promise<void> {
     try {
@@ -46,17 +74,30 @@ export async function safeFlush(sink: Pick<EventsClient, "flush">): Promise<void
     }
 }
 
+/**
+ * Construction inputs for the default `EventsQueue` factory. Most callers
+ * never see this — they pass `apiKey` + `endpoint` to `createBursora` and let
+ * it build the default. Reach for `createEventsQueue` directly when you need
+ * to inject a `fetch` implementation or tune the ingest timeout.
+ *
+ * @public
+ */
 export interface EventsClientOptions {
     readonly endpoint: string;
     readonly apiKey: string;
     readonly fetch?: typeof fetch;
     readonly log?: (msg: string, meta?: Record<string, unknown>) => void;
     readonly ingestTimeoutMs?: number;
+    /** Test-only clock injection. Defaults to `Date.now`. */
+    readonly now?: () => number;
 }
 
 const INGEST_UNAVAILABLE = "bursora_ingest_unavailable";
+const INGEST_PRICING_UNKNOWN = "bursora_pricing_unknown";
 const SETUP_ERROR_UNAVAILABLE = "bursora_setup_error_unavailable";
 const DEFAULT_INGEST_TIMEOUT_MS = 5000;
+const MAX_PENDING_SETUP_ERRORS = 256;
+const PENDING_SETUP_ERROR_TTL_MS = 60 * 60 * 1000;
 
 function logTransportFailure(log: LogFn, key: string, result: HttpResult): void {
     if (result.timedOut === true) {
@@ -69,13 +110,12 @@ function logTransportFailure(log: LogFn, key: string, result: HttpResult): void 
     });
 }
 
-export function createEventsClient(
-    opts: EventsClientOptions,
-): EventsClient & { dispose: () => void; recordSetupError: (input: SetupErrorInput) => void } {
+export function createEventsClient(opts: EventsClientOptions): ManagedEventsClient {
     const queue: EventInput[] = [];
     const transport = createTransport(opts.fetch !== undefined ? { fetch: opts.fetch } : {});
     const log = opts.log ?? createDefaultLog("ingest");
     const setupErrorLog = opts.log ?? createDefaultLog("setup_error");
+    const now = opts.now ?? Date.now;
     let url: string | null;
     let setupErrorUrl: string | null;
     let urlError = "";
@@ -89,7 +129,12 @@ export function createEventsClient(
     }
     const timeoutMs = opts.ingestTimeoutMs ?? DEFAULT_INGEST_TIMEOUT_MS;
 
-    const postJson = async (target: string, body: string, logFn: LogFn, logKey: string) => {
+    const postJson = async (
+        target: string,
+        body: string,
+        logFn: LogFn,
+        logKey: string,
+    ): Promise<HttpResult> => {
         const result = await transport.send({
             method: "POST",
             url: target,
@@ -101,18 +146,52 @@ export function createEventsClient(
             timeoutMs,
         });
         if (!result.ok) logTransportFailure(logFn, logKey, result);
+        return result;
+    };
+
+    // The ingest endpoint accepts the batch (202) even when some events name a
+    // provider/model with no pricing row: the priced events still persist and
+    // the response lists the unpriced pairs. Surface them so the SDK author
+    // sees which model needs a price; the priced spend is unaffected.
+    const reportUnpriced = async (result: HttpResult): Promise<void> => {
+        let parsed: unknown;
+        try {
+            parsed = await result.json();
+        } catch {
+            return;
+        }
+        if (typeof parsed !== "object" || parsed === null) return;
+        const unpriced = (parsed as { unpriced?: unknown }).unpriced;
+        if (!Array.isArray(unpriced)) return;
+        for (const entry of unpriced) {
+            if (typeof entry !== "object" || entry === null) continue;
+            const { provider, model } = entry as { provider?: unknown; model?: unknown };
+            if (typeof provider === "string" && typeof model === "string") {
+                log(INGEST_PRICING_UNKNOWN, { category: "pricing_unknown", provider, model });
+            }
+        }
     };
 
     // Tracks in-flight `recordSetupError` POSTs so `flush()` (and the
     // `beforeExit` drain that wraps it) can wait for them. Short-lived
     // processes (Lambda, Workers, CLIs) would otherwise exit with the
     // setup-error POST still in transit.
-    const pendingSetupErrors = new Set<Promise<void>>();
+    //
+    // Bounded by MAX_PENDING_SETUP_ERRORS (FIFO drop) and
+    // PENDING_SETUP_ERROR_TTL_MS so long-lived processes whose POSTs hang
+    // (proxy black-hole, broken egress) don't leak memory. Map preserves
+    // insertion order; value is the enqueue timestamp in ms.
+    const pendingSetupErrors = new Map<Promise<void>, number>();
 
-    const client: EventsClient & {
-        dispose: () => void;
-        recordSetupError: (input: SetupErrorInput) => void;
-    } = {
+    const evictExpiredSetupErrors = (): void => {
+        const cutoff = now() - PENDING_SETUP_ERROR_TTL_MS;
+        for (const [p, ts] of pendingSetupErrors) {
+            if (ts > cutoff) break;
+            pendingSetupErrors.delete(p);
+        }
+    };
+
+    const client: ManagedEventsClient = {
         record(event: EventInput): void {
             queue.push(event);
         },
@@ -123,11 +202,18 @@ export function createEventsClient(
                     log(INGEST_UNAVAILABLE, { category: "invalid_config", error: urlError });
                 } else {
                     const events = queue.splice(0, queue.length);
-                    await postJson(url, JSON.stringify({ events }), log, INGEST_UNAVAILABLE);
+                    const result = await postJson(
+                        url,
+                        JSON.stringify({ events }),
+                        log,
+                        INGEST_UNAVAILABLE,
+                    );
+                    if (result.ok) await reportUnpriced(result);
                 }
             }
+            evictExpiredSetupErrors();
             if (pendingSetupErrors.size > 0) {
-                await Promise.allSettled([...pendingSetupErrors]);
+                await Promise.allSettled([...pendingSetupErrors.keys()]);
             }
         },
         recordSetupError(input: SetupErrorInput): void {
@@ -138,23 +224,46 @@ export function createEventsClient(
                 });
                 return;
             }
+            evictExpiredSetupErrors();
+            // Drop the oldest in-flight POST (Map preserves insertion order)
+            // before adding a new one so the queue stays bounded.
+            while (pendingSetupErrors.size >= MAX_PENDING_SETUP_ERRORS) {
+                const oldest = pendingSetupErrors.keys().next().value;
+                if (oldest === undefined) break;
+                pendingSetupErrors.delete(oldest);
+            }
             const p = postJson(
                 setupErrorUrl,
                 JSON.stringify({ kind: input.kind }),
                 setupErrorLog,
                 SETUP_ERROR_UNAVAILABLE,
-            ).catch(() => {});
-            pendingSetupErrors.add(p);
+            ).then(
+                () => {},
+                () => {},
+            );
+            pendingSetupErrors.set(p, now());
             void p.finally(() => pendingSetupErrors.delete(p));
         },
         dispose(): void {
             unregisterClient(client);
+        },
+        __pendingSetupErrorsCount(): number {
+            return pendingSetupErrors.size;
         },
     };
 
     registerClient(client);
     return client;
 }
+
+/**
+ * Public-facing alias for `createEventsClient`. The public API uses "queue"
+ * terminology; this re-export keeps the docs and customer code consistent
+ * while internal call sites continue to use `createEventsClient`.
+ *
+ * @public
+ */
+export const createEventsQueue = createEventsClient;
 
 // Shared `beforeExit` listener + WeakRef registry so HMR / repeat-wrap cycles
 // don't leak listeners and don't pin discarded clients alive for the process.

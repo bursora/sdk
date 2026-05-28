@@ -103,6 +103,21 @@ describe("buildProxy — missing optional paths", () => {
     });
 });
 
+describe("buildProxy — duplicate path detection", () => {
+    test("throws when two leaves register the same dotted path", () => {
+        const target = { chat: { completions: { create: () => "original" } } };
+        expect(() =>
+            buildProxy(target, {
+                leaves: [
+                    ["chat.completions.create", () => "first"],
+                    ["chat.completions.create", () => "second"],
+                ],
+                lifecycle: {},
+            }),
+        ).toThrow(/buildProxy: duplicate method path 'chat\.completions\.create' in manifest/);
+    });
+});
+
 describe("buildProxy — lifecycle grafting", () => {
     test("grafts flush/dispose at root when absent on target", async () => {
         let flushed = 0;

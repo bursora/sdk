@@ -14,8 +14,7 @@ const storage = new AsyncLocalStorage<Tags>();
 
 /**
  * Read the current tags. Outside a `withTags` scope, returns an empty object.
- * The returned object is a defensive copy; mutating it does not affect the
- * underlying ALS context.
+ * Returns a copy; safe to mutate without leaking back into the ALS context.
  */
 export function currentTags(): Tags {
     const raw = storage.getStore();

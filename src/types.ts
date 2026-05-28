@@ -1,8 +1,16 @@
 /**
  * Shared types for the @bursora/sdk surface.
  *
- * Mirrors the on-the-wire contract from `app/api/v1/budget/route.ts` and
- * `app/api/v1/events/route.ts`. Server-side renames are not breaking unless
+ * Mirrors the on-the-wire contract for the v1 SDK API. The canonical Zod
+ * schemas live in the server repo and are the source of truth — these types
+ * must stay byte-compatible with them:
+ *
+ *   - `core/app/api/v1/budget/route.ts`       — budget decision (GET response)
+ *   - `core/app/api/v1/events/route.ts`       — events ingest (POST body)
+ *   - `core/app/api/v1/setup-error/route.ts`  — setup error report (POST body)
+ *
+ * When you touch any of those route schemas, update this file in the same
+ * change and ship the SDK bump. Server-side renames are not breaking unless
  * the JSON body shape changes.
  */
 

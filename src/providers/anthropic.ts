@@ -9,9 +9,11 @@
  *  - `message_start.message.usage.input_tokens` is the prompt count;
  *    output_tokens at that point is always 0.
  *  - `message_delta.usage.output_tokens` is the running CUMULATIVE total,
- *    not an incremental delta. `createAnthropicStreamHandler` closes over
- *    `lastOutputTotal` per stream so the engine's sum-of-deltas matches
- *    the final cumulative figure.
+ *    not an incremental delta. `createAnthropicStreamHandler` tracks
+ *    `lastOutputTotal` per stream on an explicit state object so the
+ *    engine's sum-of-deltas matches the final cumulative figure.
+ *  - `message_stop` marks stream completion; the handler is single-use and
+ *    refuses chunks delivered after it.
  */
 
 import { structurallyMatches } from "../internal/detect";
@@ -53,9 +55,23 @@ export function messagesUsage(response: MessagesResponse): UsageTotals {
     };
 }
 
+// Handler is single-use; one stream per instance. State lives on an explicit
+// object so the mutable surface is visible at the call site instead of hidden
+// in closure variables. `done` flips on the terminal `message_stop` chunk; any
+// later chunk throws so accidental cross-stream reuse fails loudly.
+interface AnthropicStreamState {
+    lastOutputTotal: number;
+    done: boolean;
+}
+
 export function createAnthropicStreamHandler(): (chunk: unknown) => UsageDelta | null {
-    let lastOutputTotal = 0;
+    const state: AnthropicStreamState = { lastOutputTotal: 0, done: false };
     return (raw: unknown) => {
+        if (state.done) {
+            throw new Error(
+                "[bursora] Anthropic stream handler is single-use; create a fresh handler per stream",
+            );
+        }
         const chunk = raw as AnthropicStreamChunk;
         if (chunk.type === "message_start" && chunk.message?.usage !== undefined) {
             const u = chunk.message.usage;
@@ -69,13 +85,16 @@ export function createAnthropicStreamHandler(): (chunk: unknown) => UsageDelta |
         }
         if (chunk.type === "message_delta" && chunk.usage !== undefined) {
             const total = chunk.usage.output_tokens ?? 0;
-            const delta = total - lastOutputTotal;
-            lastOutputTotal = total;
+            const delta = total - state.lastOutputTotal;
+            state.lastOutputTotal = total;
             return {
                 promptTokensDelta: 0,
                 completionTokensDelta: delta,
                 cacheTokensDelta: 0,
             };
+        }
+        if (chunk.type === "message_stop") {
+            state.done = true;
         }
         return null;
     };

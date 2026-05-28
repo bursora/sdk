@@ -6,7 +6,12 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { __pruneLiveClients, createEventsClient } from "../src/internal/events";
+import {
+    __pruneLiveClients,
+    createEventsClient,
+    type EventsClient,
+    type ManagedEventsClient,
+} from "../src/internal/events";
 
 const findBursoraBeforeExitHandler = (): ((code: number) => unknown) | undefined =>
     process.listeners("beforeExit").find((l) => l.name === "bursoraDrainOnBeforeExit") as
@@ -48,6 +53,15 @@ const mockFetchThrow = (calls: MockCall[]): typeof fetch =>
         });
         return Promise.reject(new Error("network"));
     }) as unknown as typeof fetch;
+
+const mockFetchBody = (body: unknown, status = 202): typeof fetch =>
+    (() =>
+        Promise.resolve(
+            new Response(JSON.stringify(body), {
+                status,
+                headers: { "content-type": "application/json" },
+            }),
+        )) as unknown as typeof fetch;
 
 describe("eventsClient", () => {
     test("flush() POSTs /api/v1/events with X-Bursora-Key only (no signature)", async () => {
@@ -307,6 +321,61 @@ describe("eventsClient", () => {
         expect(calls).toHaveLength(0);
         expect(logs[0]?.msg).toBe("bursora_ingest_unavailable");
         expect(logs[0]?.meta?.category).toBe("invalid_config");
+    });
+
+    test("flush() surfaces unpriced models from the 202 body", async () => {
+        const logs: { msg: string; meta: Record<string, unknown> | undefined }[] = [];
+        const client = createEventsClient({
+            endpoint: "https://app.bursora.com",
+            apiKey: API_KEY,
+            fetch: mockFetchBody({
+                status: "accepted",
+                unpriced: [{ provider: "openai", model: "gpt-7-unreleased" }],
+            }),
+            log: (msg, meta) => logs.push({ msg, meta }),
+        });
+        client.record(baseEvent);
+        await client.flush();
+        const hit = logs.find((l) => l.msg === "bursora_pricing_unknown");
+        expect(hit?.meta?.category).toBe("pricing_unknown");
+        expect(hit?.meta?.provider).toBe("openai");
+        expect(hit?.meta?.model).toBe("gpt-7-unreleased");
+    });
+
+    test("flush() emits no pricing log on a clean 202", async () => {
+        const logs: string[] = [];
+        const client = createEventsClient({
+            endpoint: "https://app.bursora.com",
+            apiKey: API_KEY,
+            fetch: mockFetchBody({ status: "accepted" }),
+            log: (m) => logs.push(m),
+        });
+        client.record(baseEvent);
+        await client.flush();
+        expect(logs).not.toContain("bursora_pricing_unknown");
+    });
+
+    test("default surface prints the unpriced model name", async () => {
+        const warnings: string[] = [];
+        const originalWarn = console.warn;
+        console.warn = (msg: unknown) => {
+            warnings.push(String(msg));
+        };
+        try {
+            const client = createEventsClient({
+                endpoint: "https://app.bursora.com",
+                apiKey: API_KEY,
+                fetch: mockFetchBody({
+                    status: "accepted",
+                    unpriced: [{ provider: "anthropic", model: "claude-99" }],
+                }),
+            });
+            client.record(baseEvent);
+            await client.flush();
+        } finally {
+            console.warn = originalWarn;
+        }
+        expect(warnings.some((w) => w.includes("anthropic/claude-99"))).toBe(true);
     });
 
     test("default surface categorizes 5xx as server_error", async () => {
@@ -572,5 +641,85 @@ describe("eventsClient", () => {
         expect(calls).toHaveLength(1);
         expect(logs).toContain("bursora_setup_error_unavailable");
         client.dispose();
+    });
+
+    test("pendingSetupErrors queue is capped at 256 with FIFO drop", () => {
+        // Hanging fetch: promises never resolve, so without a cap the queue
+        // would grow unbounded as the caller fires recordSetupError() in a loop.
+        const hangingFetch = (() =>
+            new Promise<Response>(() => {})) as unknown as typeof fetch;
+        const client = createEventsClient({
+            endpoint: "https://app.bursora.com",
+            apiKey: API_KEY,
+            fetch: hangingFetch,
+            log: () => {},
+        });
+        try {
+            for (let i = 0; i < 300; i++) {
+                client.recordSetupError({ kind: "sdk_unknown_provider" });
+            }
+            expect(client.__pendingSetupErrorsCount()).toBe(256);
+        } finally {
+            client.dispose();
+        }
+    });
+
+    test("factory return type guarantees dispose/recordSetupError are callable; raw EventsClient does not", () => {
+        // Type-level contract: the base `EventsClient` keeps `dispose` and
+        // `recordSetupError` optional so external/test sinks can omit them.
+        // The factory's `ManagedEventsClient` return type carries the guarantee
+        // that the SDK-built client always provides both, so internal callers
+        // need no optional chains.
+        const calls: MockCall[] = [];
+        const managed: ManagedEventsClient = createEventsClient({
+            endpoint: "https://app.bursora.com",
+            apiKey: API_KEY,
+            fetch: mockFetch(calls),
+            log: () => {},
+        });
+        // Callable without optional chain on the factory return type.
+        managed.recordSetupError({ kind: "sdk_unknown_provider" });
+        managed.dispose();
+        expect(typeof managed.dispose).toBe("function");
+        expect(typeof managed.recordSetupError).toBe("function");
+        // A raw EventsClient (e.g. a test sink) must NOT permit these
+        // calls without a null check, because they're optional on the
+        // base interface. These lines exist only to assert the type
+        // error; the `never` block prevents them from executing.
+        const raw: EventsClient = {
+            record: () => {},
+            flush: async () => {},
+        };
+        const unreachable = (): boolean => false;
+        if (unreachable()) {
+            // @ts-expect-error dispose is optional on the base EventsClient
+            raw.dispose();
+            // @ts-expect-error recordSetupError is optional on the base EventsClient
+            raw.recordSetupError({ kind: "sdk_unknown_provider" });
+        }
+    });
+
+    test("pendingSetupErrors drops entries older than the TTL on enqueue", () => {
+        const hangingFetch = (() =>
+            new Promise<Response>(() => {})) as unknown as typeof fetch;
+        let nowMs = 1_000_000;
+        const client = createEventsClient({
+            endpoint: "https://app.bursora.com",
+            apiKey: API_KEY,
+            fetch: hangingFetch,
+            log: () => {},
+            now: () => nowMs,
+        });
+        try {
+            client.recordSetupError({ kind: "sdk_unknown_provider" });
+            expect(client.__pendingSetupErrorsCount()).toBe(1);
+            // Advance past the 1-hour TTL.
+            nowMs += 60 * 60 * 1000 + 1;
+            client.recordSetupError({ kind: "sdk_unknown_provider" });
+            // First entry is older than TTL; only the second survives.
+            expect(client.__pendingSetupErrorsCount()).toBe(1);
+        } finally {
+            client.dispose();
+        }
     });
 });

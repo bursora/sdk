@@ -94,6 +94,48 @@ describe("wrap() — provider detection", () => {
         expect(setupErrors[0]?.kind).toBe("sdk_unknown_provider");
     });
 
+    test("setup-error path tolerates an EventsClient missing recordSetupError", () => {
+        // Older or custom EventsClient impls may not implement the optional
+        // `recordSetupError` method. The detection-failure path must still
+        // throw the expected provider-detection error, never a TypeError
+        // about a missing or non-callable method.
+        const events: EventsClient = {
+            record: () => {},
+            flush: async () => {},
+        };
+        const core: BursoraCore = {
+            decision: { fetchDecision: async () => ALLOW },
+            events,
+            now: () => 1_000,
+            flush: async () => {},
+            dispose: () => {},
+        };
+        expect(() => wrap({} as object, core)).toThrow(
+            /\[bursora\] wrap: unable to detect provider; expected an OpenAI, Anthropic, or DeepSeek-shaped client/,
+        );
+    });
+
+    test("setup-error path tolerates an EventsClient with a non-function recordSetupError", () => {
+        // Defensive: structural typing lets callers slip a non-callable value
+        // past the type check. The detection-failure path must still throw
+        // the expected provider-detection error, not a TypeError.
+        const events = {
+            record: () => {},
+            flush: async () => {},
+            recordSetupError: 42 as unknown,
+        } as unknown as EventsClient;
+        const core: BursoraCore = {
+            decision: { fetchDecision: async () => ALLOW },
+            events,
+            now: () => 1_000,
+            flush: async () => {},
+            dispose: () => {},
+        };
+        expect(() => wrap({} as object, core)).toThrow(
+            /\[bursora\] wrap: unable to detect provider; expected an OpenAI, Anthropic, or DeepSeek-shaped client/,
+        );
+    });
+
     test("prefers OpenAI when a client matches both shapes", async () => {
         const core = buildCore();
         // Hybrid client: has both OpenAI and Anthropic surface area.

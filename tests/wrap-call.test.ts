@@ -244,6 +244,51 @@ describe("wrapCall — provider error path", () => {
         expect(h.events[0]?.promptTokens).toBe(0);
         expect(h.events[0]?.completionTokens).toBe(0);
     });
+
+    test("preserves error identity when event recording throws synchronously", async () => {
+        class ProviderError extends Error {
+            constructor(message: string) {
+                super(message);
+                this.name = "ProviderError";
+            }
+        }
+        const originalError = new ProviderError("provider boom");
+        const originalStack = originalError.stack;
+
+        const eventsClient = {
+            record: () => {
+                throw new Error("recording sink exploded");
+            },
+            flush: async () => {},
+        };
+        const decisionClient = {
+            fetchDecision: async () => ALLOW,
+        };
+
+        const wrapped = wrapCall(
+            async () => {
+                throw originalError;
+            },
+            {
+                extractCallMeta,
+                extractUsage,
+                decisionClient,
+                eventsClient,
+                now: () => 1_000,
+            },
+        );
+
+        let caught: unknown = null;
+        try {
+            await wrapped({ model: "gpt-4o" });
+        } catch (e) {
+            caught = e;
+        }
+        expect(caught).toBe(originalError);
+        expect(caught).toBeInstanceOf(ProviderError);
+        expect((caught as Error).stack).toBe(originalStack);
+        expect((caught as Error).message).toBe("provider boom");
+    });
 });
 
 describe("wrapCall — fail-open semantics", () => {
@@ -428,5 +473,124 @@ describe("wrapCall — streaming", () => {
         expect((caught as Error).message).toBe("stream interrupted");
         expect(h.events).toHaveLength(1);
         expect(h.events[0]?.errored).toBe(true);
+    });
+
+    test("throws a clear error when isStream=true but response is not async iterable", async () => {
+        const h = buildHarness({});
+        // Provider returns a plain object even though the call was marked as a stream.
+        // The wrapper must detect this and throw a descriptive error instead of
+        // silently casting and crashing on the consumer's first `for await`.
+        const wrapped = wrapCall(async () => ({ id: "not-a-stream" }) as unknown, {
+            extractCallMeta: () => ({
+                provider: "openai",
+                model: "gpt-4o",
+                isStream: true,
+            }),
+            extractUsage: () => ({
+                promptTokens: 0,
+                completionTokens: 0,
+            }),
+            createStreamHandler: () => () => null,
+            decisionClient: h.decisionClient,
+            eventsClient: h.eventsClient,
+            now: () => 1_000,
+        });
+        await expect(wrapped({ model: "gpt-4o", stream: true })).rejects.toThrow(/stream/i);
+    });
+});
+
+describe("wrapCall — concurrency (no per-scope serialization)", () => {
+    const blockingProvider = () => {
+        let maxActive = 0;
+        let active = 0;
+        let release: () => void = () => {};
+        const gate = new Promise<void>((res) => {
+            release = res;
+        });
+        const call = async (_args: FakeArgs): Promise<FakeResponse> => {
+            active += 1;
+            maxActive = Math.max(maxActive, active);
+            await gate;
+            active -= 1;
+            return { id: "r1", usage: { prompt_tokens: 1, completion_tokens: 1 } };
+        };
+        return { call, release: () => release(), maxActive: () => maxActive };
+    };
+
+    test("untagged calls run concurrently (no global lock collapse)", async () => {
+        // scopeKey for untagged calls used to be "||" — the old per-scope lock
+        // collapsed ALL untagged traffic onto one global mutex, serializing the
+        // default path. Untagged calls must now overlap.
+        const h = buildHarness({});
+        const provider = blockingProvider();
+        const wrapped = wrapCall(provider.call, {
+            extractCallMeta,
+            extractUsage,
+            decisionClient: h.decisionClient,
+            eventsClient: h.eventsClient,
+            now: () => 1_000,
+        });
+
+        // No withTags → untagged.
+        const both = Promise.all([wrapped({ model: "gpt-4o" }), wrapped({ model: "gpt-4o" })]);
+        await new Promise((res) => setTimeout(res, 0));
+        expect(provider.maxActive()).toBe(2);
+        provider.release();
+        await both;
+    });
+
+    test("same-scope calls are not serialized across the provider call", async () => {
+        // The old lock was held across decide→call→record→flush, so a second
+        // same-scope call could not enter its provider call until the first
+        // fully drained. Both providers must now be in-flight at once.
+        const h = buildHarness({});
+        const provider = blockingProvider();
+        const wrapped = wrapCall(provider.call, {
+            extractCallMeta,
+            extractUsage,
+            decisionClient: h.decisionClient,
+            eventsClient: h.eventsClient,
+            now: () => 1_000,
+        });
+
+        await withTags({ tenant_id: "acme" }, async () => {
+            const both = Promise.all([wrapped({ model: "gpt-4o" }), wrapped({ model: "gpt-4o" })]);
+            await new Promise((res) => setTimeout(res, 0));
+            expect(provider.maxActive()).toBe(2);
+            provider.release();
+            await both;
+        });
+    });
+
+    test("an unconsumed stream does not block later same-scope calls", async () => {
+        // The old lock transferred to the stream's finalize step and only
+        // released on iterator done/return/throw. A stream obtained but never
+        // iterated held the lock forever, deadlocking every later same-scope
+        // call. The later call must now complete.
+        const h = buildHarness({});
+        async function* producer() {
+            yield { usage: { prompt_tokens: 1, completion_tokens: 1 } };
+        }
+        const wrapped = wrapCall<FakeArgs, FakeResponse>(
+            async (args: FakeArgs) =>
+                args.stream === true
+                    ? (producer() as unknown as FakeResponse)
+                    : ({ id: "r1", usage: { prompt_tokens: 1, completion_tokens: 1 } } satisfies FakeResponse),
+            {
+                extractCallMeta,
+                extractUsage,
+                createStreamHandler: () => () => null,
+                decisionClient: h.decisionClient,
+                eventsClient: h.eventsClient,
+                now: () => 1_000,
+            },
+        );
+
+        await withTags({ tenant_id: "acme" }, async () => {
+            // Obtain a stream but never iterate or close it.
+            await wrapped({ model: "gpt-4o", stream: true });
+            const out = await wrapped({ model: "gpt-4o" });
+            expect(out.id).toBe("r1");
+        });
     });
 });

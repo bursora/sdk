@@ -10,8 +10,8 @@ export interface LRUCacheOptions {
     readonly now: () => number;
 }
 
-export class LRUCache<V> {
-    private readonly entries = new Map<string, Entry<V>>();
+export class LRUCache<V, K extends string = string> {
+    private readonly entries = new Map<K, Entry<V>>();
     private readonly capacity: number;
     private readonly now: () => number;
 
@@ -23,7 +23,7 @@ export class LRUCache<V> {
         this.now = opts.now;
     }
 
-    get(key: string): V | undefined {
+    get(key: K): V | undefined {
         const entry = this.entries.get(key);
         if (entry === undefined) return undefined;
         if (entry.expiresAt <= this.now()) {
@@ -35,7 +35,7 @@ export class LRUCache<V> {
         return entry.value;
     }
 
-    set(key: string, value: V, ttlSeconds: number): void {
+    set(key: K, value: V, ttlSeconds: number): void {
         // Non-finite ttl would yield a non-finite expiresAt, making the entry
         // un-evictable via the TTL check. Drop poison writes.
         if (!Number.isFinite(ttlSeconds)) return;
@@ -49,5 +49,9 @@ export class LRUCache<V> {
             }
         }
         this.entries.set(key, { value, expiresAt });
+    }
+
+    delete(key: K): void {
+        this.entries.delete(key);
     }
 }
