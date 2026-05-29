@@ -16,7 +16,7 @@
 
 import { type BursoraOptions, createBursora } from "./bursora";
 import type { CallIntent } from "./internal/decision";
-import { type EventsClient, safeFlush } from "./internal/events";
+import type { EventsClient } from "./internal/events";
 import { type MethodHolder, resolvePath } from "./internal/path-resolver";
 import { buildProxy } from "./internal/proxy-builder";
 import { type DecisionLookup, wrapCall } from "./internal/wrap-call";
@@ -40,8 +40,6 @@ export interface BursoraCore {
 }
 
 export type Wrapped<T> = T & {
-    readonly flush: () => Promise<void>;
-    readonly dispose: () => void;
     readonly budget: BudgetSnapshot | null;
 };
 
@@ -116,8 +114,6 @@ export function wrap<T extends object>(
     return buildProxy(client, {
         leaves,
         lifecycle: {
-            flush: () => safeFlush(core.events),
-            dispose: () => core.events.dispose?.(),
             readBudget: () => latestSnapshot,
         },
     }) as Wrapped<T>;

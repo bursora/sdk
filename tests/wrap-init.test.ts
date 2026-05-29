@@ -5,13 +5,11 @@
  * options object `{ apiKey, endpoint }`. In the options-object path the
  * SDK builds a private core for this wrapped client. These tests pin:
  *   - decision lookup hits the configured endpoint with the configured key
- *   - usage events are queued and drained by `flush()` on the wrapped client
- *   - `dispose()` releases the internal events client's `beforeExit` slot
+ *   - usage events are reported automatically after each wrapped call
  *   - invalid options throw the same way as `createBursora` does directly
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { __pruneLiveClients } from "../src/internal/events";
 import type { Decision } from "../src/types";
 import { wrap } from "../src/wrap";
 
@@ -75,7 +73,6 @@ describe("wrap(client, { apiKey, endpoint }) — inline init", () => {
             model: "gpt-4o-mini",
             messages: [{ role: "user", content: "hi" }],
         });
-        await openai.flush();
 
         const budgetCall = calls.find((c) => c.url.includes("/api/v1/budget"));
         const eventsCall = calls.find((c) => c.url.includes("/api/v1/events"));
@@ -84,25 +81,6 @@ describe("wrap(client, { apiKey, endpoint }) — inline init", () => {
         expect(budgetCall?.headers["x-bursora-key"]).toBe(API_KEY);
         expect(eventsCall?.headers["x-bursora-key"]).toBe(API_KEY);
         expect(eventsCall?.body).toContain('"provider":"openai"');
-
-        openai.dispose();
-    });
-
-    test("dispose() releases the internal events client's beforeExit slot", async () => {
-        __pruneLiveClients();
-        stubFetch((async () => new Response("", { status: 202 })) as unknown as typeof fetch);
-
-        const openai = wrap(openaiClient(), { apiKey: API_KEY, endpoint: ENDPOINT });
-        openai.dispose();
-
-        const handler = process
-            .listeners("beforeExit")
-            .find((l) => l.name === "bursoraDrainOnBeforeExit") as
-            | ((code: number) => unknown)
-            | undefined;
-        if (handler !== undefined) await Promise.resolve(handler(0));
-
-        expect(__pruneLiveClients()).toBe(0);
     });
 
     test("throws when apiKey is empty", () => {

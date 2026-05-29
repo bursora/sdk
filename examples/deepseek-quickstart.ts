@@ -23,9 +23,6 @@ await deepseek.chat.completions.create({
     model: "deepseek-chat",
     messages: [{ role: "user", content: "Say hi" }],
 });
-
-await deepseek.flush();
-deepseek.dispose();
 // endregion
 
 export { deepseek };

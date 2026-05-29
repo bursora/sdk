@@ -68,11 +68,7 @@ describe("wrap(client).budget snapshot", () => {
             resetAt: "2025-05-11T00:00:00.000Z",
         });
         const openai = wrap(openaiClient(), { apiKey: API_KEY, endpoint: ENDPOINT });
-        try {
-            expect(openai.budget).toBeNull();
-        } finally {
-            openai.dispose();
-        }
+        expect(openai.budget).toBeNull();
     });
 
     test("reflects the latest decision's remainingUsd and resetAt after a wrapped call", async () => {
@@ -85,18 +81,14 @@ describe("wrap(client).budget snapshot", () => {
             resetAt: "2025-05-11T00:00:00.000Z",
         });
         const openai = wrap(openaiClient(), { apiKey: API_KEY, endpoint: ENDPOINT });
-        try {
-            await openai.chat.completions.create({
-                model: "gpt-4o-mini",
-                messages: [{ role: "user", content: "hi" }],
-            });
-            expect(openai.budget).toEqual({
-                remainingUsd: 75,
-                resetAt: "2025-05-11T00:00:00.000Z",
-            });
-        } finally {
-            openai.dispose();
-        }
+        await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [{ role: "user", content: "hi" }],
+        });
+        expect(openai.budget).toEqual({
+            remainingUsd: 75,
+            resetAt: "2025-05-11T00:00:00.000Z",
+        });
     });
 
     test("stays null after a wrapped call when the server omits both fields (old server)", async () => {
@@ -107,15 +99,11 @@ describe("wrap(client).budget snapshot", () => {
             ttl_s: 60,
         });
         const openai = wrap(openaiClient(), { apiKey: API_KEY, endpoint: ENDPOINT });
-        try {
-            await openai.chat.completions.create({
-                model: "gpt-4o-mini",
-                messages: [{ role: "user", content: "hi" }],
-            });
-            expect(openai.budget).toBeNull();
-        } finally {
-            openai.dispose();
-        }
+        await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [{ role: "user", content: "hi" }],
+        });
+        expect(openai.budget).toBeNull();
     });
 
     test("stays null when the server returns the empty-string resetAt sentinel (no budgets)", async () => {
@@ -128,15 +116,11 @@ describe("wrap(client).budget snapshot", () => {
             resetAt: "",
         });
         const openai = wrap(openaiClient(), { apiKey: API_KEY, endpoint: ENDPOINT });
-        try {
-            await openai.chat.completions.create({
-                model: "gpt-4o-mini",
-                messages: [{ role: "user", content: "hi" }],
-            });
-            expect(openai.budget).toBeNull();
-        } finally {
-            openai.dispose();
-        }
+        await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [{ role: "user", content: "hi" }],
+        });
+        expect(openai.budget).toBeNull();
     });
 
     test("preserves the last-known-good snapshot when a later call omits the fields (old server)", async () => {
@@ -172,28 +156,24 @@ describe("wrap(client).budget snapshot", () => {
         }) as unknown as typeof fetch;
 
         const openai = wrap(openaiClient(), { apiKey: API_KEY, endpoint: ENDPOINT });
-        try {
-            await openai.chat.completions.create({
-                model: "gpt-4o-mini",
-                messages: [{ role: "user", content: "hi" }],
-            });
-            expect(openai.budget).toEqual({
-                remainingUsd: 75,
-                resetAt: "2025-05-11T00:00:00.000Z",
-            });
+        await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [{ role: "user", content: "hi" }],
+        });
+        expect(openai.budget).toEqual({
+            remainingUsd: 75,
+            resetAt: "2025-05-11T00:00:00.000Z",
+        });
 
-            await openai.chat.completions.create({
-                model: "gpt-4o-mini",
-                messages: [{ role: "user", content: "hi again" }],
-            });
-            // Second call returned no fields — snapshot must stay the prior value.
-            expect(openai.budget).toEqual({
-                remainingUsd: 75,
-                resetAt: "2025-05-11T00:00:00.000Z",
-            });
-        } finally {
-            openai.dispose();
-        }
+        await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [{ role: "user", content: "hi again" }],
+        });
+        // Second call returned no fields — snapshot must stay the prior value.
+        expect(openai.budget).toEqual({
+            remainingUsd: 75,
+            resetAt: "2025-05-11T00:00:00.000Z",
+        });
     });
 
     test("keeps the same snapshot reference across calls that hit the decision cache, and replaces it on a fresh fetch", async () => {
@@ -240,44 +220,40 @@ describe("wrap(client).budget snapshot", () => {
             endpoint: ENDPOINT,
             clock: () => now,
         });
-        try {
-            await openai.chat.completions.create({
-                model: "gpt-4o-mini",
-                messages: [{ role: "user", content: "hi" }],
-            });
-            const afterFirst = openai.budget;
-            expect(afterFirst).toEqual({
-                remainingUsd: 75,
-                resetAt: "2025-05-11T00:00:00.000Z",
-            });
+        await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [{ role: "user", content: "hi" }],
+        });
+        const afterFirst = openai.budget;
+        expect(afterFirst).toEqual({
+            remainingUsd: 75,
+            resetAt: "2025-05-11T00:00:00.000Z",
+        });
 
-            // Still inside ttl_s window — second call is a cache hit on the
-            // decision client. Snapshot must NOT be reassigned: reference
-            // stability is the observable proof.
-            now = 30_000;
-            await openai.chat.completions.create({
-                model: "gpt-4o-mini",
-                messages: [{ role: "user", content: "hi again" }],
-            });
-            expect(fetchCount).toBe(1);
-            expect(openai.budget).toBe(afterFirst);
+        // Still inside ttl_s window — second call is a cache hit on the
+        // decision client. Snapshot must NOT be reassigned: reference
+        // stability is the observable proof.
+        now = 30_000;
+        await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [{ role: "user", content: "hi again" }],
+        });
+        expect(fetchCount).toBe(1);
+        expect(openai.budget).toBe(afterFirst);
 
-            // Past ttl_s — next call refetches and snapshot reflects the new
-            // decision. Reference must change.
-            now = 1_000 + 61_000;
-            await openai.chat.completions.create({
-                model: "gpt-4o-mini",
-                messages: [{ role: "user", content: "hi yet again" }],
-            });
-            expect(fetchCount).toBe(2);
-            expect(openai.budget).not.toBe(afterFirst);
-            expect(openai.budget).toEqual({
-                remainingUsd: 70,
-                resetAt: "2025-05-11T00:00:00.000Z",
-            });
-        } finally {
-            openai.dispose();
-        }
+        // Past ttl_s — next call refetches and snapshot reflects the new
+        // decision. Reference must change.
+        now = 1_000 + 61_000;
+        await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [{ role: "user", content: "hi yet again" }],
+        });
+        expect(fetchCount).toBe(2);
+        expect(openai.budget).not.toBe(afterFirst);
+        expect(openai.budget).toEqual({
+            remainingUsd: 70,
+            resetAt: "2025-05-11T00:00:00.000Z",
+        });
     });
 
     test("updates when a later call returns a different snapshot", async () => {
@@ -314,20 +290,16 @@ describe("wrap(client).budget snapshot", () => {
         }) as unknown as typeof fetch;
 
         const openai = wrap(openaiClient(), { apiKey: API_KEY, endpoint: ENDPOINT });
-        try {
-            await openai.chat.completions.create({
-                model: "gpt-4o-mini",
-                messages: [{ role: "user", content: "hi" }],
-            });
-            expect(openai.budget?.remainingUsd).toBe(75);
+        await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [{ role: "user", content: "hi" }],
+        });
+        expect(openai.budget?.remainingUsd).toBe(75);
 
-            await openai.chat.completions.create({
-                model: "gpt-4o-mini",
-                messages: [{ role: "user", content: "hi again" }],
-            });
-            expect(openai.budget?.remainingUsd).toBe(0);
-        } finally {
-            openai.dispose();
-        }
+        await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [{ role: "user", content: "hi again" }],
+        });
+        expect(openai.budget?.remainingUsd).toBe(0);
     });
 });

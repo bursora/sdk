@@ -14,8 +14,6 @@
 import type { BudgetSnapshot } from "../types";
 
 export interface ProxyLifecycle {
-    readonly flush?: () => Promise<void>;
-    readonly dispose?: () => void;
     /**
      * Read-only accessor for the snapshot grafted as `target.budget`. The Proxy
      * invokes this on every read, so the value reflects the latest state
@@ -156,16 +154,6 @@ function wrapSegmentProxy(target: object, overrides: ReadonlyMap<string, unknown
 }
 
 function lifecycleFor(target: object, prop: string, lifecycle: ProxyLifecycle): unknown {
-    if (prop === "flush") {
-        if (prop in target) return undefined;
-        const flush = lifecycle.flush;
-        return flush === undefined ? undefined : flush;
-    }
-    if (prop === "dispose") {
-        if (prop in target) return undefined;
-        const dispose = lifecycle.dispose;
-        return dispose === undefined ? undefined : dispose;
-    }
     if (prop === "budget") {
         if (prop in target) return undefined;
         const readBudget = lifecycle.readBudget;

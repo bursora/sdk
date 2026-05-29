@@ -6,7 +6,7 @@
  *   - returns the wrapped fn at registered leaf paths
  *   - returns nested Proxies for intermediate segments
  *   - falls through via Reflect.get for unrelated props
- *   - grafts lifecycle props (flush/dispose) at root only when absent
+ *   - grafts lifecycle props (budget) at root only when absent
  *   - skips paths whose intermediate segments are missing on the target
  */
 
@@ -119,44 +119,35 @@ describe("buildProxy — duplicate path detection", () => {
 });
 
 describe("buildProxy — lifecycle grafting", () => {
-    test("grafts flush/dispose at root when absent on target", async () => {
-        let flushed = 0;
-        let disposed = 0;
+    test("grafts budget at root when absent on target", () => {
+        const snapshot = { remainingUsd: 5, resetAt: "2026-01-01T00:00:00.000Z" };
         const target = { chat: { completions: { create: () => "wrapped" } } };
         const proxy = buildProxy(target, {
             leaves: new Map([["chat.completions.create", () => "wrapped"]]),
             lifecycle: {
-                flush: async () => {
-                    flushed += 1;
-                },
-                dispose: () => {
-                    disposed += 1;
-                },
+                readBudget: () => snapshot,
             },
         });
-        await (proxy as unknown as { flush: () => Promise<void> }).flush();
-        (proxy as unknown as { dispose: () => void }).dispose();
-        expect(flushed).toBe(1);
-        expect(disposed).toBe(1);
+        expect((proxy as unknown as { budget: unknown }).budget).toBe(snapshot);
     });
 
     test("does NOT graft when target already owns the prop", () => {
-        const original = { hello: "world" };
+        const original = { remainingUsd: 1, resetAt: "2026-01-01T00:00:00.000Z" };
         const target = {
             chat: { completions: { create: () => "wrapped" } },
-            flush: () => original,
+            budget: original,
         };
         let grafted = 0;
         const proxy = buildProxy(target, {
             leaves: new Map([["chat.completions.create", () => "wrapped"]]),
             lifecycle: {
-                flush: async () => {
+                readBudget: () => {
                     grafted += 1;
+                    return null;
                 },
             },
         });
-        const out = (proxy as typeof target).flush();
-        expect(out).toBe(original);
+        expect((proxy as typeof target).budget).toBe(original);
         expect(grafted).toBe(0);
     });
 });

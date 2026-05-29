@@ -14,13 +14,6 @@ await openai.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [{ role: "user", content: "Say hi" }],
 });
-
-// In serverless / short-lived processes (Lambda, Cloudflare Workers, CLIs),
-// drain pending usage events before the host exits so they reach the dashboard.
-await openai.flush();
-// In long-lived handlers (Next.js HMR, repeated wrap cycles), release the
-// wrapper's beforeExit listener slot once you're done with it.
-openai.dispose();
 // endregion
 
 export { openai };
