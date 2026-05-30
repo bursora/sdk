@@ -1,6 +1,6 @@
 {
     "name": "@bursora/sdk",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "Bursora SDK — wrap your AI provider clients to enforce per-agent budgets.",
     "license": "Apache-2.0",
     "author": "Vildan Bina <vildanbina@gmail.com>",
