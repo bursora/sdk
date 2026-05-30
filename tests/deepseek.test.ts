@@ -1,11 +1,11 @@
 /**
- * DeepSeek manifest detection.
+ * DeepSeek metering via the baseURL → vendor map.
  *
  * DeepSeek has no first-party SDK; users wrap either the openai or
  * @anthropic-ai/sdk client with `baseURL` overridden to api.deepseek.com.
- * The manifest engine must:
+ * DeepSeek is one data row, not a manifest. `wrap()` must:
  *   - Tag emitted events `provider: "deepseek"` when baseURL matches
- *   - Fall back to the original openai/anthropic tag when it doesn't
+ *   - Fall back to the adapter's native openai/anthropic tag when it doesn't
  *   - Share the existing extractors (no duplicate token math)
  */
 

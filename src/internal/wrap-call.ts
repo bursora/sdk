@@ -12,20 +12,18 @@
  * engine handles every provider.
  */
 
-import { BudgetExceededError } from "../errors";
 import { currentTags } from "../tags";
-import type { Decision, Tags, UsageDelta, UsageTotals } from "../types";
-import type { CallIntent } from "./decision";
+import type { Tags, UsageDelta, UsageTotals } from "../types";
 import { type EventsClient, safeFlush } from "./events";
+import { buildEventInput, type DecisionLookup, preflightGate } from "./lifecycle";
+
+/** @internal Re-exported from `./lifecycle`; kept here for back-compat imports. */
+export type { DecisionLookup } from "./lifecycle";
 
 interface CallMeta {
     readonly provider: string;
     readonly model: string;
     readonly isStream: boolean;
-}
-
-export interface DecisionLookup {
-    fetchDecision(tags: Tags, intent?: CallIntent): Promise<Decision | null>;
 }
 
 export type StreamChunkHandler = (chunk: unknown) => UsageDelta | null;
@@ -47,17 +45,10 @@ export function wrapCall<Args, Response>(
         const tags = currentTags();
         const meta = opts.extractCallMeta(args);
 
-        const decision = await opts.decisionClient.fetchDecision(tags, {
+        await preflightGate(opts.decisionClient, tags, {
             provider: meta.provider,
             model: meta.model,
         });
-        if (decision !== null && !decision.allow && decision.mode === "block") {
-            throw new BudgetExceededError({
-                tag: tags,
-                reason: decision.reason,
-                mode: decision.mode,
-            });
-        }
 
         const startedAt = opts.now();
         let response: Response;
@@ -91,29 +82,11 @@ export function wrapCall<Args, Response>(
         }
 
         const usage = opts.extractUsage(response);
-        opts.eventsClient.record({
-            ...baseEvent(meta, tags, startedAt, opts.now()),
-            promptTokens: usage.promptTokens,
-            completionTokens: usage.completionTokens,
-            ...(usage.cacheTokens === undefined ? {} : { cacheTokens: usage.cacheTokens }),
-            ...(usage.requestId === undefined ? {} : { requestId: usage.requestId }),
-        });
+        opts.eventsClient.record(buildEventInput(meta, tags, startedAt, opts.now(), usage, false));
         // Await: cost must commit before next preflight so block budgets stop
         // the next call once cumulative spend crosses the cap.
         await safeFlush(opts.eventsClient);
         return response;
-    };
-}
-
-function baseEvent(meta: CallMeta, tags: Tags, startedAt: number, finishedAt: number) {
-    return {
-        provider: meta.provider,
-        model: meta.model,
-        ts: new Date(startedAt).toISOString(),
-        tenantId: tags.tenant_id ?? null,
-        agentId: tags.agent_id ?? null,
-        workflowId: tags.workflow_id ?? null,
-        latencyMs: finishedAt - startedAt,
     };
 }
 
@@ -124,12 +97,7 @@ function emitErrored(
     now: () => number,
     startedAt: number,
 ): void {
-    eventsClient.record({
-        ...baseEvent(meta, tags, startedAt, now()),
-        promptTokens: 0,
-        completionTokens: 0,
-        errored: true,
-    });
+    eventsClient.record(buildEventInput(meta, tags, startedAt, now(), null, true));
 }
 
 function isAsyncIterable<T>(x: unknown): x is AsyncIterable<T> {
@@ -164,14 +132,23 @@ function wrapStream<Response>(
     const finalize = async (errored: boolean): Promise<void> => {
         if (emitted) return;
         emitted = true;
-        eventsClient.record({
-            ...baseEvent(meta, tags, startedAt, now()),
-            promptTokens: prompt,
-            completionTokens: completion,
-            ...(cache > 0 ? { cacheTokens: cache } : {}),
-            ...(requestId !== undefined ? { requestId } : {}),
-            ...(errored ? { errored: true } : {}),
-        });
+        eventsClient.record(
+            buildEventInput(
+                meta,
+                tags,
+                startedAt,
+                now(),
+                {
+                    promptTokens: prompt,
+                    completionTokens: completion,
+                    // 0 must omit the field (matches the non-stream path); only a
+                    // positive cache count is recorded.
+                    ...(cache > 0 ? { cacheTokens: cache } : {}),
+                    ...(requestId !== undefined ? { requestId } : {}),
+                },
+                errored,
+            ),
+        );
         // Symmetric with the non-stream path: cost must commit before next
         // call's preflight so block budgets stop the next call at the cap.
         await safeFlush(eventsClient);

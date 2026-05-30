@@ -7,6 +7,10 @@
  * generic `wrap()` engine reads this manifest to assemble the Proxy.
  */
 
+import {
+    type ChunkReading,
+    createCumulativeStreamHandler,
+} from "../internal/cumulative-stream-handler";
 import { structurallyMatches } from "../internal/detect";
 import type { MethodSpec, ProviderManifest, UsageDelta, UsageTotals } from "../types";
 
@@ -97,49 +101,24 @@ function embeddingsUsage(response: EmbeddingsResponse): ManifestUsage {
     };
 }
 
-// OpenAI typically reports `usage` once on a terminal stream chunk, but a
-// chunk can legitimately carry `cached_tokens` without `prompt_tokens`. The
-// handler tracks the latest seen totals across the stream and emits deltas
-// relative to the previously emitted totals so the engine's sum-of-deltas
-// matches the final correct values. Subtracting cache per chunk (instead of
-// at stream end) would underflow promptTokens when a cache-only chunk arrives
-// before any prompt_tokens chunk.
-export function createOpenAIStreamHandler(): (chunk: unknown) => UsageDelta | null {
-    let promptTotal = 0;
-    let completionTotal = 0;
-    let cacheTotal = 0;
-    let lastEmittedPromptUncached = 0;
-    let lastEmittedCompletion = 0;
-    let lastEmittedCache = 0;
-    let requestId: string | undefined;
-
-    return (raw: unknown) => {
-        const chunk = raw as OpenAIStreamChunk;
-        if (requestId === undefined && chunk.id !== undefined) requestId = chunk.id;
-        const u = chunk.usage;
-        if (!u && chunk.id === undefined) return null;
-
-        if (u?.prompt_tokens !== undefined) promptTotal = u.prompt_tokens;
-        if (u?.completion_tokens !== undefined) completionTotal = u.completion_tokens;
-        if (u?.prompt_tokens_details?.cached_tokens !== undefined) {
-            cacheTotal = u.prompt_tokens_details.cached_tokens;
-        }
-
-        const promptUncached = Math.max(0, promptTotal - cacheTotal);
-        const promptDelta = promptUncached - lastEmittedPromptUncached;
-        const completionDelta = completionTotal - lastEmittedCompletion;
-        const cacheDelta = cacheTotal - lastEmittedCache;
-        lastEmittedPromptUncached = promptUncached;
-        lastEmittedCompletion = completionTotal;
-        lastEmittedCache = cacheTotal;
-
-        return {
-            promptTokensDelta: promptDelta,
-            completionTokensDelta: completionDelta,
-            ...(cacheDelta !== 0 ? { cacheTokensDelta: cacheDelta } : {}),
-            ...(requestId !== undefined ? { requestId } : {}),
-        };
+// OpenAI reports usage as cumulative totals (typically once, on a terminal
+// chunk), but a chunk can legitimately carry `cached_tokens` without
+// `prompt_tokens`. `hasUsage` is `usage` being a real object (a null usage
+// counts as no usage here); the shared handler does the latest-wins delta math.
+function openaiChunkReading(raw: unknown): ChunkReading {
+    const chunk = raw as OpenAIStreamChunk;
+    const u = chunk.usage;
+    return {
+        prompt: u?.prompt_tokens,
+        completion: u?.completion_tokens,
+        cache: u?.prompt_tokens_details?.cached_tokens,
+        requestId: chunk.id,
+        hasUsage: u != null,
     };
+}
+
+export function createOpenAIStreamHandler(): (chunk: unknown) => UsageDelta | null {
+    return createCumulativeStreamHandler(openaiChunkReading);
 }
 
 const chatMeta = (args: unknown) => {

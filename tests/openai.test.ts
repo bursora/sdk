@@ -408,7 +408,7 @@ describe("wrap(openai)", () => {
         const h = buildHarness();
         const bogus = { embeddings: { create: async () => ({}) } } as unknown as MockClient;
         expect(() => wrap(bogus, h.core)).toThrow(
-            /\[bursora\] wrap: unable to detect provider; expected an OpenAI, Anthropic, or DeepSeek-shaped client/,
+            /\[bursora\] wrap: unable to detect provider; expected an OpenAI, Anthropic, or Google \(Gemini\)-shaped client/,
         );
     });
 
@@ -418,14 +418,14 @@ describe("wrap(openai)", () => {
             chat: { completions: { create: async () => ({}) } },
         } as unknown as MockClient;
         expect(() => wrap(bogus, h.core)).toThrow(
-            /\[bursora\] wrap: unable to detect provider; expected an OpenAI, Anthropic, or DeepSeek-shaped client/,
+            /\[bursora\] wrap: unable to detect provider; expected an OpenAI, Anthropic, or Google \(Gemini\)-shaped client/,
         );
     });
 
     test("throws at setup when a plain object is passed", () => {
         const h = buildHarness();
         expect(() => wrap({} as unknown as MockClient, h.core)).toThrow(
-            /\[bursora\] wrap: unable to detect provider; expected an OpenAI, Anthropic, or DeepSeek-shaped client/,
+            /\[bursora\] wrap: unable to detect provider; expected an OpenAI, Anthropic, or Google \(Gemini\)-shaped client/,
         );
     });
 
@@ -452,5 +452,4 @@ describe("wrap(openai)", () => {
         expect(h.events).toHaveLength(1);
         expect(h.events[0]?.errored).toBe(true);
     });
-
 });

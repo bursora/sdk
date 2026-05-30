@@ -1,4 +1,4 @@
-/** Quickstart. The region below is embedded verbatim in docs/onboarding.md. */
+/** Quickstart. The region below is the verbatim snippet for the onboarding quickstart. */
 
 // region:openai-quickstart
 import { wrap } from "@bursora/sdk";

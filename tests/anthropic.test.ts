@@ -336,7 +336,7 @@ describe("wrap(anthropic)", () => {
     test("throws at setup when client lacks any known provider shape", () => {
         const h = buildHarness();
         expect(() => wrap({} as unknown as MockAnthropic, h.core)).toThrow(
-            /\[bursora\] wrap: unable to detect provider; expected an OpenAI, Anthropic, or DeepSeek-shaped client/,
+            /\[bursora\] wrap: unable to detect provider; expected an OpenAI, Anthropic, or Google \(Gemini\)-shaped client/,
         );
     });
 
@@ -344,7 +344,7 @@ describe("wrap(anthropic)", () => {
         const h = buildHarness();
         const bogus = { messages: {} } as unknown as MockAnthropic;
         expect(() => wrap(bogus, h.core)).toThrow(
-            /\[bursora\] wrap: unable to detect provider; expected an OpenAI, Anthropic, or DeepSeek-shaped client/,
+            /\[bursora\] wrap: unable to detect provider; expected an OpenAI, Anthropic, or Google \(Gemini\)-shaped client/,
         );
     });
 

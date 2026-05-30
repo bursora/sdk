@@ -188,23 +188,24 @@ describe("wrap(client).budget snapshot", () => {
             const u = typeof url === "string" ? url : url.toString();
             if (u.includes("/api/v1/budget")) {
                 fetchCount += 1;
-                const body = fetchCount === 1
-                    ? {
-                          allow: true,
-                          mode: "notify",
-                          reason: "under:workspace:*:25/100",
-                          ttl_s: 60,
-                          remainingUsd: 75,
-                          resetAt: "2025-05-11T00:00:00.000Z",
-                      }
-                    : {
-                          allow: true,
-                          mode: "notify",
-                          reason: "under:workspace:*:30/100",
-                          ttl_s: 60,
-                          remainingUsd: 70,
-                          resetAt: "2025-05-11T00:00:00.000Z",
-                      };
+                const body =
+                    fetchCount === 1
+                        ? {
+                              allow: true,
+                              mode: "notify",
+                              reason: "under:workspace:*:25/100",
+                              ttl_s: 60,
+                              remainingUsd: 75,
+                              resetAt: "2025-05-11T00:00:00.000Z",
+                          }
+                        : {
+                              allow: true,
+                              mode: "notify",
+                              reason: "under:workspace:*:30/100",
+                              ttl_s: 60,
+                              remainingUsd: 70,
+                              resetAt: "2025-05-11T00:00:00.000Z",
+                          };
                 return Promise.resolve(
                     new Response(JSON.stringify(body), {
                         status: 200,
