@@ -15,7 +15,8 @@
         "anthropic",
         "cost",
         "budget",
-        "ai-agent"
+        "ai-agent",
+        "vercel-ai-sdk"
     ],
     "main": "./dist/index.cjs",
     "module": "./dist/index.mjs",
@@ -51,6 +52,14 @@
     "engines": {
         "node": ">=18",
         "bun": ">=1.0"
+    },
+    "peerDependencies": {
+        "ai": ">=5"
+    },
+    "peerDependenciesMeta": {
+        "ai": {
+            "optional": true
+        }
     },
     "devDependencies": {
         "@eslint/js": "^10.0.1",

@@ -17,9 +17,14 @@
  *     hand them to `createBursora` to mix-and-match (e.g. custom cache +
  *     default queue).
  *   - `withTags(tags, fn)` — propagates tag context across awaited calls.
+ *   - `bursoraMiddleware(opts)` — for apps on the Vercel AI SDK (`ai`). Returns
+ *     a middleware for `wrapLanguageModel({ model, middleware })` that gates and
+ *     meters `generateText`/`streamText` calls. `ai` is an optional peer dep.
  *   - `BudgetExceededError` — thrown when a block-mode budget rejects a call.
  */
 
+/** @public */
+export { bursoraMiddleware } from "./ai-sdk";
 /** @public */
 export { createBursora } from "./bursora";
 /** @public */
