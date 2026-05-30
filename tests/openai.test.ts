@@ -452,5 +452,4 @@ describe("wrap(openai)", () => {
         expect(h.events).toHaveLength(1);
         expect(h.events[0]?.errored).toBe(true);
     });
-
 });

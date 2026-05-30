@@ -575,7 +575,10 @@ describe("wrapCall — concurrency (no per-scope serialization)", () => {
             async (args: FakeArgs) =>
                 args.stream === true
                     ? (producer() as unknown as FakeResponse)
-                    : ({ id: "r1", usage: { prompt_tokens: 1, completion_tokens: 1 } } satisfies FakeResponse),
+                    : ({
+                          id: "r1",
+                          usage: { prompt_tokens: 1, completion_tokens: 1 },
+                      } satisfies FakeResponse),
             {
                 extractCallMeta,
                 extractUsage,

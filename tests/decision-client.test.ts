@@ -188,10 +188,7 @@ describe("decisionClient.fetchDecision", () => {
             { tenant_id: "acme" },
             { provider: "openai", model: "gpt-4o-mini" },
         );
-        await client.fetchDecision(
-            { tenant_id: "acme" },
-            { provider: "openai", model: "gpt-4o" },
-        );
+        await client.fetchDecision({ tenant_id: "acme" }, { provider: "openai", model: "gpt-4o" });
         expect(calls).toHaveLength(1);
     });
 
@@ -218,10 +215,7 @@ describe("decisionClient.fetchDecision", () => {
             { tenant_id: "acme" },
             { provider: "openai", model: "gpt-4o-mini" },
         );
-        await client.fetchDecision(
-            { tenant_id: "acme" },
-            { provider: "openai", model: "gpt-4o" },
-        );
+        await client.fetchDecision({ tenant_id: "acme" }, { provider: "openai", model: "gpt-4o" });
         expect(calls).toHaveLength(2);
     });
 
@@ -243,14 +237,8 @@ describe("decisionClient.fetchDecision", () => {
             now: () => 0,
             fetch: mockFetchOk(blockDecision, calls),
         });
-        await client.fetchDecision(
-            { tenant_id: "acme" },
-            { provider: "openai", model: "gpt-4o" },
-        );
-        await client.fetchDecision(
-            { tenant_id: "acme" },
-            { provider: "openai", model: "gpt-4o" },
-        );
+        await client.fetchDecision({ tenant_id: "acme" }, { provider: "openai", model: "gpt-4o" });
+        await client.fetchDecision({ tenant_id: "acme" }, { provider: "openai", model: "gpt-4o" });
         expect(calls).toHaveLength(1);
     });
 

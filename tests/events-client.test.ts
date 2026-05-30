@@ -646,8 +646,7 @@ describe("eventsClient", () => {
     test("pendingSetupErrors queue is capped at 256 with FIFO drop", () => {
         // Hanging fetch: promises never resolve, so without a cap the queue
         // would grow unbounded as the caller fires recordSetupError() in a loop.
-        const hangingFetch = (() =>
-            new Promise<Response>(() => {})) as unknown as typeof fetch;
+        const hangingFetch = (() => new Promise<Response>(() => {})) as unknown as typeof fetch;
         const client = createEventsClient({
             endpoint: "https://app.bursora.com",
             apiKey: API_KEY,
@@ -700,8 +699,7 @@ describe("eventsClient", () => {
     });
 
     test("pendingSetupErrors drops entries older than the TTL on enqueue", () => {
-        const hangingFetch = (() =>
-            new Promise<Response>(() => {})) as unknown as typeof fetch;
+        const hangingFetch = (() => new Promise<Response>(() => {})) as unknown as typeof fetch;
         let nowMs = 1_000_000;
         const client = createEventsClient({
             endpoint: "https://app.bursora.com",

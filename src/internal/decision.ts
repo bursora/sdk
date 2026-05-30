@@ -150,13 +150,14 @@ export function createDecisionClient(opts: DecisionClientOptions): DecisionClien
             // pre-decide an expensive-model call. Reads probe the specific
             // key first, then fall back to scope-only.
             const scopeOnly = scopeKey(tags.tenant_id, tags.agent_id, tags.workflow_id);
-            const intentKey = intent !== undefined
-                ? `${scopeOnly}|${intent.provider}:${intent.model}` as ScopeKey
-                : undefined;
-            const cached = (intentKey !== undefined
-                ? readVersionedEntry(cache, intentKey, SCOPE_KEY_VERSION)
-                : undefined)
-                ?? readVersionedEntry(cache, scopeOnly, SCOPE_KEY_VERSION);
+            const intentKey =
+                intent !== undefined
+                    ? (`${scopeOnly}|${intent.provider}:${intent.model}` as ScopeKey)
+                    : undefined;
+            const cached =
+                (intentKey !== undefined
+                    ? readVersionedEntry(cache, intentKey, SCOPE_KEY_VERSION)
+                    : undefined) ?? readVersionedEntry(cache, scopeOnly, SCOPE_KEY_VERSION);
             if (cached !== undefined) return cached;
 
             let url: string;
@@ -207,10 +208,7 @@ export function createDecisionClient(opts: DecisionClientOptions): DecisionClien
                 });
                 return null;
             }
-            const effectiveTtl = Math.max(
-                0,
-                Math.min(MAX_DECISION_TTL_SECONDS, parsed.ttl_s),
-            );
+            const effectiveTtl = Math.max(0, Math.min(MAX_DECISION_TTL_SECONDS, parsed.ttl_s));
             if (effectiveTtl !== parsed.ttl_s) {
                 log(DECISION_UNAVAILABLE, {
                     category: "invalid_response",
@@ -220,14 +218,9 @@ export function createDecisionClient(opts: DecisionClientOptions): DecisionClien
                 });
             }
             if (effectiveTtl > 0) {
-                const writeKey = parsed.mode === "block" && intentKey !== undefined
-                    ? intentKey
-                    : scopeOnly;
-                cache.set(
-                    writeKey,
-                    { version: SCOPE_KEY_VERSION, value: parsed },
-                    effectiveTtl,
-                );
+                const writeKey =
+                    parsed.mode === "block" && intentKey !== undefined ? intentKey : scopeOnly;
+                cache.set(writeKey, { version: SCOPE_KEY_VERSION, value: parsed }, effectiveTtl);
             }
             return parsed;
         },
