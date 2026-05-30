@@ -1,7 +1,7 @@
 # @bursora/sdk
 
 Wrap your AI provider clients to enforce per-agent, per-tenant, and per-workflow
-budgets. Decisions cache for 60 seconds; events stream asynchronously.
+budgets. Decisions cache for 60 seconds; usage reports flush after each call.
 
 ## Install
 

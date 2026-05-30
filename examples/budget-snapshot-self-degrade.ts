@@ -1,7 +1,7 @@
 /**
- * Budget snapshot self-degrade. The region below is embedded verbatim in
- * docs/onboarding.md. Read `openai.budget` between calls to skip optional
- * work before the next pre-call check fires a block.
+ * Budget snapshot self-degrade. Demonstrates the self-degrade recipe: read
+ * `openai.budget` between calls to skip optional work before the next pre-call
+ * check fires a block.
  */
 
 // region:budget-snapshot-self-degrade
