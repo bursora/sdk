@@ -82,7 +82,7 @@ describe("wrap() — provider detection", () => {
     test("throws a clear error on a plain {} client", () => {
         const core = buildCore();
         expect(() => wrap({} as object, core)).toThrow(
-            /\[bursora\] wrap: unable to detect provider; expected an OpenAI, Anthropic, or DeepSeek-shaped client/,
+            /\[bursora\] wrap: unable to detect provider; expected an OpenAI or Anthropic-shaped client/,
         );
     });
 
@@ -111,7 +111,7 @@ describe("wrap() — provider detection", () => {
             dispose: () => {},
         };
         expect(() => wrap({} as object, core)).toThrow(
-            /\[bursora\] wrap: unable to detect provider; expected an OpenAI, Anthropic, or DeepSeek-shaped client/,
+            /\[bursora\] wrap: unable to detect provider; expected an OpenAI or Anthropic-shaped client/,
         );
     });
 
@@ -132,7 +132,7 @@ describe("wrap() — provider detection", () => {
             dispose: () => {},
         };
         expect(() => wrap({} as object, core)).toThrow(
-            /\[bursora\] wrap: unable to detect provider; expected an OpenAI, Anthropic, or DeepSeek-shaped client/,
+            /\[bursora\] wrap: unable to detect provider; expected an OpenAI or Anthropic-shaped client/,
         );
     });
 
@@ -153,7 +153,9 @@ describe("wrap() — provider detection", () => {
         expect(out.id).toBe("c1");
     });
 
-    test("DeepSeek-flavored hybrid client wins over plain OpenAI/Anthropic", async () => {
+    test("provider slug is resolved from baseURL, independent of matched shape", async () => {
+        // A hybrid client matches the OpenAI shape first, but its DeepSeek
+        // baseURL — not the manifest — decides the emitted provider slug.
         const events: { provider: string }[] = [];
         const core: BursoraCore = {
             decision: { fetchDecision: async () => ALLOW },
@@ -176,5 +178,26 @@ describe("wrap() — provider detection", () => {
             messages: [{ role: "user", content: "hi" }],
         });
         expect(events[0]?.provider).toBe("deepseek");
+    });
+
+    test("an OpenAI client pointed at a Groq baseURL emits provider 'groq'", async () => {
+        const events: { provider: string }[] = [];
+        const core: BursoraCore = {
+            decision: { fetchDecision: async () => ALLOW },
+            events: {
+                record: (e) => events.push(e as { provider: string }),
+                flush: async () => {},
+            },
+            now: () => 1_000,
+            flush: async () => {},
+            dispose: () => {},
+        };
+        const client = { baseURL: "https://api.groq.com/openai/v1", ...openaiShape() };
+        const wrapped = wrap(client, core);
+        await wrapped.chat.completions.create({
+            model: "llama-3.3-70b",
+            messages: [{ role: "user", content: "hi" }],
+        });
+        expect(events[0]?.provider).toBe("groq");
     });
 });

@@ -1,11 +1,12 @@
 /**
  * @bursora/sdk public surface.
  *
- *   - `wrap(client, { apiKey, endpoint })` — auto-detects OpenAI, Anthropic,
- *     or DeepSeek client by shape (DeepSeek via `baseURL` inspection), returns
- *     a Proxy that flows every instrumented method through the Bursora
- *     decision/event lifecycle. The SDK builds a private `BursoraCore` for this
- *     wrapped client.
+ *   - `wrap(client, { apiKey, endpoint })` — auto-detects an OpenAI or
+ *     Anthropic client by shape, returns a Proxy that flows every instrumented
+ *     method through the Bursora decision/event lifecycle. The provider slug
+ *     for each event is resolved from the client's `baseURL`, so any
+ *     OpenAI-compatible vendor (DeepSeek, Groq, xAI, ...) meters correctly. The
+ *     SDK builds a private `BursoraCore` for this wrapped client.
  *   - `wrap(client, core)` — advanced. Pass a pre-built `BursoraCore` to share
  *     one decision cache + events queue across multiple wrapped clients.
  *   - `createBursora(opts)` — builds a shared `BursoraCore` (decision cache +

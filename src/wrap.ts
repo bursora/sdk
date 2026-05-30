@@ -18,10 +18,10 @@ import { type BursoraOptions, createBursora } from "./bursora";
 import type { CallIntent } from "./internal/decision";
 import type { EventsClient } from "./internal/events";
 import { type MethodHolder, resolvePath } from "./internal/path-resolver";
+import { providerFromBaseURL } from "./internal/provider-from-base-url";
 import { buildProxy } from "./internal/proxy-builder";
 import { type DecisionLookup, wrapCall } from "./internal/wrap-call";
 import { anthropicManifest } from "./providers/anthropic";
-import { deepseekAnthropicManifest, deepseekOpenaiManifest } from "./providers/deepseek";
 import { openaiManifest } from "./providers/openai";
 import type { BudgetSnapshot, Decision, MethodSpec, ProviderManifest, Tags } from "./types";
 
@@ -43,16 +43,13 @@ export type Wrapped<T> = T & {
     readonly budget: BudgetSnapshot | null;
 };
 
-// Order is load-bearing: DeepSeek manifests gate on `baseURL` and must be
-// tried before the plain shape-only OpenAI / Anthropic manifests, otherwise
-// a DeepSeek-flavored client would short-circuit on the plain manifest and
-// emit events tagged with the wrong provider. Pinned by `wrap-detect.test.ts`.
-const MANIFESTS: readonly ProviderManifest[] = [
-    deepseekOpenaiManifest,
-    deepseekAnthropicManifest,
-    openaiManifest,
-    anthropicManifest,
-];
+// Order governs the shape tie-break only: a hybrid client matching both the
+// OpenAI and Anthropic shapes is claimed by whichever manifest comes first
+// (OpenAI). Provider labeling is independent — the slug is resolved per call
+// from the client's `baseURL` (see `providerFromBaseURL`), so manifest order
+// no longer affects which provider an event carries. Pinned by
+// `wrap-detect.test.ts`.
+const MANIFESTS: readonly ProviderManifest[] = [openaiManifest, anthropicManifest];
 
 export function wrap<T extends object>(
     client: T,
@@ -72,7 +69,7 @@ export function wrap<T extends object>(
             core.events.recordSetupError({ kind: "sdk_unknown_provider" });
         }
         throw new Error(
-            "[bursora] wrap: unable to detect provider; expected an OpenAI, Anthropic, or DeepSeek-shaped client",
+            "[bursora] wrap: unable to detect provider; expected an OpenAI or Anthropic-shaped client",
         );
     }
 
@@ -107,7 +104,7 @@ export function wrap<T extends object>(
         if (target === undefined) continue;
         leaves.push([
             spec.path.join("."),
-            wrapMethod(target, spec, manifest.provider, core, snapshotTap),
+            wrapMethod(target, spec, client, manifest.provider, core, snapshotTap),
         ]);
     }
 
@@ -128,7 +125,8 @@ function toBudgetSnapshot(decision: Decision): BudgetSnapshot | null {
 function wrapMethod(
     holder: MethodHolder,
     spec: MethodSpec,
-    provider: string,
+    client: object,
+    fallbackProvider: string,
     core: BursoraCore,
     decisionLookup: DecisionLookup,
 ): (args: unknown) => Promise<unknown> {
@@ -138,7 +136,11 @@ function wrapMethod(
         now: core.now,
         extractCallMeta: (args) => {
             const meta = spec.extractMeta(args);
-            return { provider, model: meta.model, isStream: meta.isStream };
+            return {
+                provider: providerFromBaseURL(client, fallbackProvider),
+                model: meta.model,
+                isStream: meta.isStream,
+            };
         },
         extractUsage: (res) => spec.extractUsage(res),
         ...(spec.createStreamHandler === undefined
