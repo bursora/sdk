@@ -71,7 +71,7 @@ export function wrap<T extends object>(
             core.events.recordSetupError({ kind: "sdk_unknown_provider" });
         }
         throw new Error(
-            "[bursora] wrap: unable to detect provider; expected an OpenAI or Anthropic-shaped client",
+            "[bursora] wrap: unable to detect provider; expected an OpenAI, Anthropic, or Google (Gemini)-shaped client",
         );
     }
 

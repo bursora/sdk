@@ -17,7 +17,7 @@ const HOST_VENDORS: readonly (readonly [string, string])[] = [
     ["api.groq.com", "groq"],
     ["api.x.ai", "xai"],
     ["api.mistral.ai", "mistral"],
-    ["api.together", "together"],
+    ["api.together.xyz", "together"],
     ["api.fireworks.ai", "fireworks"],
     ["api.perplexity.ai", "perplexity"],
     ["openrouter.ai", "openrouter"],

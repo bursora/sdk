@@ -11,9 +11,9 @@ npm i @bursora/sdk
 # or: pnpm add @bursora/sdk
 ```
 
-You also install the provider client of your choice (`openai` or
-`@anthropic-ai/sdk`; DeepSeek reuses `openai`). The SDK uses structural
-typing, so it does not bundle them.
+You also install the provider client of your choice (`openai`,
+`@anthropic-ai/sdk`, or `@google/genai`; DeepSeek reuses `openai`). The SDK uses
+structural typing, so it does not bundle them.
 
 ## Usage
 
@@ -51,6 +51,25 @@ import { wrap } from "@bursora/sdk";
 const anthropic = wrap(new Anthropic(), { apiKey, endpoint });
 ```
 
+Google Gemini's native client (`@google/genai`) is detected by shape too. Wrap
+it the same way; calls go through `models.generateContent` and
+`models.generateContentStream`.
+
+```ts
+import { GoogleGenAI } from "@google/genai";
+import { wrap } from "@bursora/sdk";
+
+const genai = wrap(new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }), {
+    apiKey,
+    endpoint,
+});
+
+await genai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: "hi",
+});
+```
+
 DeepSeek has no first-party SDK; reuse the `openai` package and override
 `baseURL`. The wrapper detects the override and tags events accordingly.
 
@@ -65,6 +84,31 @@ const deepseek = wrap(
     }),
     { apiKey, endpoint },
 );
+```
+
+## Vercel AI SDK
+
+Apps on the `ai` package call `generateText({ model })` instead of constructing
+a provider client, so `wrap()` never sees those calls. Use `bursoraMiddleware`
+with `wrapLanguageModel` instead. It gates each call before it goes out (a
+block-mode denial throws `BudgetExceededError` out of `generateText`) and meters
+every step of a tool loop after. `ai` is an optional peer dependency.
+
+```ts
+import { openai } from "@ai-sdk/openai";
+import { generateText, wrapLanguageModel } from "ai";
+import { bursoraMiddleware } from "@bursora/sdk";
+
+const model = wrapLanguageModel({
+    model: openai("gpt-4o"),
+    middleware: bursoraMiddleware({
+        apiKey,
+        endpoint,
+        tags: { tenant_id: "acme", agent_id: "support-bot" },
+    }),
+});
+
+await generateText({ model, prompt: "hi" });
 ```
 
 ## Sharing one core across clients

@@ -82,7 +82,7 @@ describe("wrap() — provider detection", () => {
     test("throws a clear error on a plain {} client", () => {
         const core = buildCore();
         expect(() => wrap({} as object, core)).toThrow(
-            /\[bursora\] wrap: unable to detect provider; expected an OpenAI or Anthropic-shaped client/,
+            /\[bursora\] wrap: unable to detect provider; expected an OpenAI, Anthropic, or Google \(Gemini\)-shaped client/,
         );
     });
 
@@ -111,7 +111,7 @@ describe("wrap() — provider detection", () => {
             dispose: () => {},
         };
         expect(() => wrap({} as object, core)).toThrow(
-            /\[bursora\] wrap: unable to detect provider; expected an OpenAI or Anthropic-shaped client/,
+            /\[bursora\] wrap: unable to detect provider; expected an OpenAI, Anthropic, or Google \(Gemini\)-shaped client/,
         );
     });
 
@@ -132,7 +132,7 @@ describe("wrap() — provider detection", () => {
             dispose: () => {},
         };
         expect(() => wrap({} as object, core)).toThrow(
-            /\[bursora\] wrap: unable to detect provider; expected an OpenAI or Anthropic-shaped client/,
+            /\[bursora\] wrap: unable to detect provider; expected an OpenAI, Anthropic, or Google \(Gemini\)-shaped client/,
         );
     });
 

@@ -1,8 +1,8 @@
 /**
  * @bursora/sdk public surface.
  *
- *   - `wrap(client, { apiKey, endpoint })` — auto-detects an OpenAI or
- *     Anthropic client by shape, returns a Proxy that flows every instrumented
+ *   - `wrap(client, { apiKey, endpoint })` — auto-detects an OpenAI,
+ *     Anthropic, or Google (Gemini) client by shape, returns a Proxy that flows every instrumented
  *     method through the Bursora decision/event lifecycle. The provider slug
  *     for each event is resolved from the client's `baseURL`, so any
  *     OpenAI-compatible vendor (DeepSeek, Groq, xAI, ...) meters correctly. The
