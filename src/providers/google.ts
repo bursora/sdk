@@ -27,6 +27,10 @@
  * No runtime dependency on `@google/genai` — detection is purely structural.
  */
 
+import {
+    type ChunkReading,
+    createCumulativeStreamHandler,
+} from "../internal/cumulative-stream-handler";
 import { structurallyMatches } from "../internal/detect";
 import type { MethodSpec, ProviderManifest, UsageDelta, UsageTotals } from "../types";
 
@@ -63,46 +67,28 @@ function generateContentUsage(response: GenerateContentResponse): UsageTotals {
 }
 
 // Gemini reports `usageMetadata` as cumulative running totals, typically on the
-// final stream chunk (intermediate chunks may carry partial or no usage). The
-// handler tracks the latest seen totals and emits deltas relative to the last
-// emitted figure so the engine's sum-of-deltas matches the final totals — the
-// same latest-wins pattern the OpenAI stream handler uses.
-export function createGoogleStreamHandler(): (chunk: unknown) => UsageDelta | null {
-    let promptTotal = 0;
-    let completionTotal = 0;
-    let cacheTotal = 0;
-    let lastEmittedPromptUncached = 0;
-    let lastEmittedCompletion = 0;
-    let lastEmittedCache = 0;
-    let requestId: string | undefined;
-
-    return (raw: unknown) => {
-        const chunk = raw as GenerateContentResponse;
-        if (requestId === undefined && chunk.responseId !== undefined) requestId = chunk.responseId;
-        const u = chunk.usageMetadata;
-        if (u === undefined && chunk.responseId === undefined) return null;
-
-        if (u?.promptTokenCount !== undefined) promptTotal = u.promptTokenCount;
-        if (u?.cachedContentTokenCount !== undefined) cacheTotal = u.cachedContentTokenCount;
-        if (u?.candidatesTokenCount !== undefined || u?.thoughtsTokenCount !== undefined) {
-            completionTotal = (u.candidatesTokenCount ?? 0) + (u.thoughtsTokenCount ?? 0);
-        }
-
-        const promptUncached = Math.max(0, promptTotal - cacheTotal);
-        const promptDelta = promptUncached - lastEmittedPromptUncached;
-        const completionDelta = completionTotal - lastEmittedCompletion;
-        const cacheDelta = cacheTotal - lastEmittedCache;
-        lastEmittedPromptUncached = promptUncached;
-        lastEmittedCompletion = completionTotal;
-        lastEmittedCache = cacheTotal;
-
-        return {
-            promptTokensDelta: promptDelta,
-            completionTokensDelta: completionDelta,
-            ...(cacheDelta !== 0 ? { cacheTokensDelta: cacheDelta } : {}),
-            ...(requestId !== undefined ? { requestId } : {}),
-        };
+// final stream chunk (intermediate chunks may carry partial or no usage).
+// `completion` folds thinking tokens in just like the non-stream path; a null
+// usage still counts as present (`hasUsage`) here, matching the prior behavior.
+// The shared handler does the latest-wins delta math.
+function googleChunkReading(raw: unknown): ChunkReading {
+    const chunk = raw as GenerateContentResponse;
+    const u = chunk.usageMetadata;
+    const hasCompletion =
+        u?.candidatesTokenCount !== undefined || u?.thoughtsTokenCount !== undefined;
+    return {
+        prompt: u?.promptTokenCount,
+        completion: hasCompletion
+            ? (u?.candidatesTokenCount ?? 0) + (u?.thoughtsTokenCount ?? 0)
+            : undefined,
+        cache: u?.cachedContentTokenCount,
+        requestId: chunk.responseId,
+        hasUsage: u !== undefined,
     };
+}
+
+export function createGoogleStreamHandler(): (chunk: unknown) => UsageDelta | null {
+    return createCumulativeStreamHandler(googleChunkReading);
 }
 
 const generateContent: MethodSpec<GenerateContentArgs, GenerateContentResponse> = {

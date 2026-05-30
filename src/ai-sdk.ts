@@ -232,10 +232,17 @@ function tapStream(
                 controller.close();
                 return;
             }
-            const id = responseMetadataId(res.value);
-            if (id !== undefined && requestId === undefined) requestId = id;
-            const finish = finishUsage(res.value);
-            if (finish !== null) usageRaw = finish;
+            // One pass over the chunk: a stream part is either a
+            // `response-metadata` (carries the request id) or a `finish`
+            // (carries final usage), never both, so an else-if is exact.
+            if (typeof res.value === "object" && res.value !== null) {
+                const c = res.value as { type?: unknown; id?: unknown; usage?: unknown };
+                if (c.type === "response-metadata") {
+                    if (requestId === undefined && typeof c.id === "string") requestId = c.id;
+                } else if (c.type === "finish" && typeof c.usage === "object" && c.usage !== null) {
+                    usageRaw = c.usage;
+                }
+            }
             controller.enqueue(res.value);
         },
         cancel(reason): Promise<void> {
@@ -258,8 +265,7 @@ function toTarget(model: LanguageModelLike): RecordTarget {
  * `google`, ...), matching the slugs synced pricing is keyed by.
  */
 function providerSlug(provider: string): string {
-    const head = provider.split(".")[0];
-    return head === undefined || head === "" ? provider : head;
+    return provider.split(".")[0] || provider;
 }
 
 /**
@@ -305,19 +311,4 @@ function mapUsage(usageRaw: unknown, requestId: string | undefined): UsageTotals
 function numField(obj: Record<string, unknown>, key: string): number | undefined {
     const v = obj[key];
     return typeof v === "number" && Number.isFinite(v) ? v : undefined;
-}
-
-function finishUsage(chunk: unknown): LanguageModelUsageLike | null {
-    if (typeof chunk !== "object" || chunk === null) return null;
-    const c = chunk as { type?: unknown; usage?: unknown };
-    if (c.type !== "finish") return null;
-    if (typeof c.usage !== "object" || c.usage === null) return null;
-    return c.usage as LanguageModelUsageLike;
-}
-
-function responseMetadataId(chunk: unknown): string | undefined {
-    if (typeof chunk !== "object" || chunk === null) return undefined;
-    const c = chunk as { type?: unknown; id?: unknown };
-    if (c.type !== "response-metadata") return undefined;
-    return typeof c.id === "string" ? c.id : undefined;
 }
