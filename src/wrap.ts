@@ -22,6 +22,7 @@ import { providerFromBaseURL } from "./internal/provider-from-base-url";
 import { buildProxy } from "./internal/proxy-builder";
 import { type DecisionLookup, wrapCall } from "./internal/wrap-call";
 import { anthropicManifest } from "./providers/anthropic";
+import { googleManifest } from "./providers/google";
 import { openaiManifest } from "./providers/openai";
 import type { BudgetSnapshot, Decision, MethodSpec, ProviderManifest, Tags } from "./types";
 
@@ -43,13 +44,14 @@ export type Wrapped<T> = T & {
     readonly budget: BudgetSnapshot | null;
 };
 
-// Order governs the shape tie-break only: a hybrid client matching both the
-// OpenAI and Anthropic shapes is claimed by whichever manifest comes first
-// (OpenAI). Provider labeling is independent — the slug is resolved per call
-// from the client's `baseURL` (see `providerFromBaseURL`), so manifest order
-// no longer affects which provider an event carries. Pinned by
+// Order governs the shape tie-break only: a hybrid client matching more than
+// one shape is claimed by whichever manifest comes first. The Google native
+// shape (`models.generateContent`) is disjoint from the OpenAI and Anthropic
+// shapes, so it never competes. Provider labeling is independent — the slug is
+// resolved per call from the client's `baseURL` (see `providerFromBaseURL`), so
+// manifest order no longer affects which provider an event carries. Pinned by
 // `wrap-detect.test.ts`.
-const MANIFESTS: readonly ProviderManifest[] = [openaiManifest, anthropicManifest];
+const MANIFESTS: readonly ProviderManifest[] = [openaiManifest, anthropicManifest, googleManifest];
 
 export function wrap<T extends object>(
     client: T,
