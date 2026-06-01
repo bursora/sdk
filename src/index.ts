@@ -24,7 +24,7 @@
  */
 
 /** @public */
-export { bursoraMiddleware } from "./ai-sdk";
+export { bursoraMiddleware } from "./providers/ai-sdk";
 /** @public */
 export { createBursora } from "./bursora";
 /** @public */
