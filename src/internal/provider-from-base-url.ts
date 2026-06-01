@@ -21,6 +21,7 @@ const HOST_VENDORS: readonly (readonly [string, string])[] = [
     ["api.fireworks.ai", "fireworks"],
     ["api.perplexity.ai", "perplexity"],
     ["openrouter.ai", "openrouter"],
+    ["ai-gateway.vercel.sh", "vercel"],
     ["localhost:11434", "ollama"],
     ["generativelanguage.googleapis.com", "google"],
     ["api.openai.com", "openai"],

@@ -33,19 +33,6 @@ declare module "openai" {
         readonly baseURL?: string;
     }
 
-    interface EmbeddingCreateParams {
-        readonly model: string;
-        readonly input: string | ReadonlyArray<string>;
-    }
-
-    interface EmbeddingResponse {
-        readonly data: ReadonlyArray<{ readonly embedding: ReadonlyArray<number> }>;
-        readonly usage?: {
-            readonly prompt_tokens: number;
-            readonly total_tokens: number;
-        };
-    }
-
     class OpenAI {
         constructor(opts?: OpenAIOptions);
         readonly chat: {
@@ -55,9 +42,6 @@ declare module "openai" {
         };
         readonly responses: {
             create: (args: ChatCreateParams) => Promise<ChatCompletion>;
-        };
-        readonly embeddings: {
-            create: (args: EmbeddingCreateParams) => Promise<EmbeddingResponse>;
         };
     }
 

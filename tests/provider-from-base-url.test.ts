@@ -20,6 +20,7 @@ const cases: ReadonlyArray<readonly [string, string]> = [
     ["https://api.fireworks.ai/inference/v1", "fireworks"],
     ["https://api.perplexity.ai", "perplexity"],
     ["https://openrouter.ai/api/v1", "openrouter"],
+    ["https://ai-gateway.vercel.sh/v1", "vercel"],
     ["http://localhost:11434/v1", "ollama"],
     ["https://generativelanguage.googleapis.com/v1beta/openai", "google"],
     ["https://api.openai.com/v1", "openai"],
