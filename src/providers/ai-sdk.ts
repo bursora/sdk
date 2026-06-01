@@ -28,35 +28,53 @@
  *
  * `ai` is an optional peer dependency. This module never imports it; the
  * returned object is structurally a `LanguageModelV2Middleware` (AI SDK 5) and
- * a `LanguageModelV3Middleware` (AI SDK 6) — the hook contract is identical
- * across both, only the type suffix differs — so the same value drops into
- * either version's `wrapLanguageModel`.
+ * a `LanguageModelV3Middleware` (AI SDK 6). The hook shape (`doGenerate`,
+ * `doStream`, `model`, `params`) is identical across both; only token usage
+ * differs — flat numbers on V2, nested `inputTokens.{total,cacheRead,...}` on
+ * V3 — and `mapUsage` reads either. So the same value drops into either
+ * version's `wrapLanguageModel`.
  */
 
-import { type BursoraOptions, createBursora } from "./bursora";
-import { buildEventInput, preflightGate, type RecordTarget } from "./internal/lifecycle";
-import { currentTags } from "./tags";
-import type { Tags, UsageTotals } from "./types";
-import type { BursoraCore } from "./wrap";
-
-/**
- * Normalized token usage as the AI SDK reports it on a generate result and on
- * the stream `finish` part. Every field is optional because the spec types
- * them as `number | undefined`; values are read defensively.
- */
-interface LanguageModelUsageLike {
-    readonly inputTokens?: number;
-    readonly outputTokens?: number;
-    readonly totalTokens?: number;
-    readonly reasoningTokens?: number;
-    readonly cachedInputTokens?: number;
-}
+import { type BursoraOptions, createBursora } from "../bursora";
+import { buildEventInput, preflightGate, type RecordTarget } from "../internal/lifecycle";
+import { currentTags } from "../tags";
+import type { Tags, UsageTotals } from "../types";
+import type { BursoraCore } from "../wrap";
 
 /** The slice of a `LanguageModelV2`/`V3` the middleware reads for the call intent. */
 interface LanguageModelLike {
     readonly provider: string;
     readonly modelId: string;
 }
+
+/**
+ * Token usage as the AI SDK reports it on a generate result. Two shapes ship:
+ * AI SDK 5 (`LanguageModelV2Usage`) is flat; AI SDK 6 (`LanguageModelV3Usage`)
+ * nests input/output. This union is a supertype of both, so either version's
+ * result stays assignable; `mapUsage` reads whichever arrived. Leaves are
+ * `number | undefined` per the spec and read defensively.
+ */
+type LanguageModelUsageLike =
+    | {
+          readonly inputTokens?: number | undefined;
+          readonly outputTokens?: number | undefined;
+          readonly totalTokens?: number | undefined;
+          readonly reasoningTokens?: number | undefined;
+          readonly cachedInputTokens?: number | undefined;
+      }
+    | {
+          readonly inputTokens?: {
+              readonly total?: number | undefined;
+              readonly noCache?: number | undefined;
+              readonly cacheRead?: number | undefined;
+              readonly cacheWrite?: number | undefined;
+          };
+          readonly outputTokens?: {
+              readonly total?: number | undefined;
+              readonly text?: number | undefined;
+              readonly reasoning?: number | undefined;
+          };
+      };
 
 /** The slice of a generate result the middleware reads. */
 interface GenerateResultLike {
@@ -98,6 +116,12 @@ interface WrapStreamOptions<S extends StreamResultLike> {
  * @public
  */
 export interface BursoraLanguageModelMiddleware {
+    /**
+     * AI SDK 6 (`LanguageModelV3Middleware`) requires this discriminator; AI SDK
+     * 5 (`LanguageModelV2Middleware`) has no such field and ignores the extra.
+     * It is type-only plumbing — only the hooks below run at runtime.
+     */
+    readonly specificationVersion: "v3";
     wrapGenerate<R extends GenerateResultLike>(options: WrapGenerateOptions<R>): Promise<R>;
     wrapStream<S extends StreamResultLike>(options: WrapStreamOptions<S>): Promise<S>;
 }
@@ -127,6 +151,7 @@ export function bursoraMiddleware(opts: BursoraMiddlewareOptions): BursoraLangua
     const closureTags = opts.tags ?? {};
 
     return {
+        specificationVersion: "v3",
         async wrapGenerate<R extends GenerateResultLike>(
             options: WrapGenerateOptions<R>,
         ): Promise<R> {
@@ -287,25 +312,37 @@ function tagsFromProviderOptions(params: CallParamsLike | undefined): Tags {
 }
 
 /**
- * Map AI SDK usage to Bursora totals. Reads every field defensively (external
- * data). `cachedInputTokens` is the cached slice of the prompt billed cheaper,
- * so it is split out of `promptTokens` exactly like the OpenAI manifest splits
- * `prompt_tokens_details.cached_tokens`. `outputTokens` already includes any
- * reasoning tokens, so it maps straight to `completionTokens`.
+ * Map AI SDK usage to Bursora totals, reading both shapes the SDK ships: AI SDK
+ * 5 (V2) reports flat `inputTokens`/`outputTokens`/`cachedInputTokens` numbers;
+ * AI SDK 6 (V3) nests them (`inputTokens.{total,cacheRead,...}`,
+ * `outputTokens.total`). All fields read defensively (external data). The
+ * cached-read slice is billed cheaper, so it is split out of `promptTokens` into
+ * `cacheTokens`, exactly like the OpenAI manifest splits
+ * `prompt_tokens_details.cached_tokens`. Output maps straight to
+ * `completionTokens` (it already includes reasoning tokens).
  */
 function mapUsage(usageRaw: unknown, requestId: string | undefined): UsageTotals {
-    const u =
-        typeof usageRaw === "object" && usageRaw !== null
-            ? (usageRaw as Record<string, unknown>)
-            : {};
-    const input = numField(u, "inputTokens") ?? 0;
-    const cached = numField(u, "cachedInputTokens");
+    const u = asRecord(usageRaw) ?? {};
+    const nestedInput = asRecord(u.inputTokens);
+    const totalPrompt =
+        (nestedInput ? numField(nestedInput, "total") : numField(u, "inputTokens")) ?? 0;
+    const cache = nestedInput
+        ? numField(nestedInput, "cacheRead")
+        : numField(u, "cachedInputTokens");
+    const completion =
+        (nestedInput
+            ? numField(asRecord(u.outputTokens) ?? {}, "total")
+            : numField(u, "outputTokens")) ?? 0;
     return {
-        promptTokens: Math.max(0, input - (cached ?? 0)),
-        completionTokens: numField(u, "outputTokens") ?? 0,
-        ...(cached === undefined ? {} : { cacheTokens: cached }),
+        promptTokens: Math.max(0, totalPrompt - (cache ?? 0)),
+        completionTokens: completion,
+        ...(cache === undefined ? {} : { cacheTokens: cache }),
         ...(requestId === undefined ? {} : { requestId }),
     };
+}
+
+function asRecord(v: unknown): Record<string, unknown> | undefined {
+    return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : undefined;
 }
 
 function numField(obj: Record<string, unknown>, key: string): number | undefined {
