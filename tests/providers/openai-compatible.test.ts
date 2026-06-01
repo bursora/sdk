@@ -46,6 +46,7 @@ const VENDORS: ReadonlyArray<readonly [string, string]> = [
     ["https://api.fireworks.ai/inference/v1", "fireworks"],
     ["https://api.perplexity.ai", "perplexity"],
     ["https://openrouter.ai/api/v1", "openrouter"],
+    ["https://ai-gateway.vercel.sh/v1", "vercel"],
     ["http://localhost:11434/v1", "ollama"],
 ];
 
