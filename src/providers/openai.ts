@@ -3,7 +3,7 @@
  *
  * Declares the four OpenAI client methods Bursora instruments
  * (`chat.completions.create`, `responses.create`, `embeddings.create`,
- * `beta.chat.completions.parse`) plus per-method usage extractors. The
+ * `chat.completions.parse`) plus per-method usage extractors. The
  * generic `wrap()` engine reads this manifest to assemble the Proxy.
  */
 
@@ -150,8 +150,8 @@ const embeddingsCreate: MethodSpec<EmbeddingsArgs, EmbeddingsResponse> = {
     extractUsage: (res) => embeddingsUsage(res as EmbeddingsResponse),
 };
 
-const betaChatParse: MethodSpec<ChatArgs, ChatResponse> = {
-    path: ["beta", "chat", "completions", "parse"],
+const chatParse: MethodSpec<ChatArgs, ChatResponse> = {
+    path: ["chat", "completions", "parse"],
     optional: true,
     extractMeta: (args) => ({ model: (args as ChatArgs).model, isStream: false }),
     extractUsage: (res) => chatUsage(res as ChatResponse),
@@ -161,7 +161,7 @@ const openaiMethods: readonly MethodSpec[] = [
     chatCompletionsCreate as MethodSpec,
     responsesCreate as MethodSpec,
     embeddingsCreate as MethodSpec,
-    betaChatParse as MethodSpec,
+    chatParse as MethodSpec,
 ];
 
 export const openaiManifest: ProviderManifest = {

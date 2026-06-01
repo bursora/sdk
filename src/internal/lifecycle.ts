@@ -2,7 +2,7 @@
  * Shared call-lifecycle primitives used by every wrap surface.
  *
  * Both the client-Proxy path (`internal/wrap-call.ts`) and the Vercel AI SDK
- * middleware (`../ai-sdk.ts`) gate the call the same way and shape the usage
+ * middleware (`../providers/ai-sdk.ts`) gate the call the same way and shape the usage
  * event the same way; this module owns that logic so neither path
  * re-implements it.
  */
