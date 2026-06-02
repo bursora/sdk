@@ -16,7 +16,7 @@
  * all run against the real local server.
  */
 
-import { BudgetExceededError, withTags, wrap } from "@bursora/sdk";
+import { BudgetExceededError, createBursora, withTags, wrap } from "@bursora/sdk";
 import { makeMockOpenAI, type MockUsageRange } from "./mock-clients";
 
 interface Env {
@@ -119,7 +119,8 @@ async function fireBatch(
     tags: Record<string, string>,
     onProgress?: (result: keyof Stats) => void,
 ): Promise<Stats> {
-    const client = wrap(makeMockOpenAI(opts.range), { apiKey: env.apiKey, endpoint: env.endpoint });
+    const core = createBursora({ apiKey: env.apiKey, endpoint: env.endpoint });
+    const client = wrap(makeMockOpenAI(opts.range), core);
     const stats: Stats = { ok: 0, blocked: 0, error: 0 };
     for (let i = 0; i < opts.calls; i++) {
         let result: keyof Stats = "ok";
@@ -138,7 +139,7 @@ async function fireBatch(
         onProgress?.(result);
         if (opts.interval > 0 && i < opts.calls - 1) await sleep(opts.interval);
     }
-    await client.flush();
+    await core.flush();
     return stats;
 }
 
