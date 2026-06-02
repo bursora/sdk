@@ -3,17 +3,26 @@
  *
  *   bun run start              # fire calls through the wrapped mock client
  *   bun run anomaly            # seed baseline + spike, trigger anomaly cron
+ *   bun run seed               # bulk-fill the DB with backdated events
  *
- * Flags (both commands):
+ * Flags (start, anomaly):
  *   --calls N                  total requests
  *   --interval Nms             delay between requests (ms)
- *   --prompt-min N             min prompt tokens per call
- *   --prompt-max N             max prompt tokens per call
- *   --completion-min N         min completion tokens per call
- *   --completion-max N         max completion tokens per call
  *
- * Only the provider HTTP call is mocked. Auth, ingest, budgets, anomaly cron
- * all run against the real local server.
+ * Flags (seed):
+ *   --events N                 total events to ingest
+ *   --days N                   spread events back over N days from now
+ *
+ * Token-range flags (all commands):
+ *   --prompt-min N             min prompt tokens per event
+ *   --prompt-max N             max prompt tokens per event
+ *   --completion-min N         min completion tokens per event
+ *   --completion-max N         max completion tokens per event
+ *
+ * start/anomaly mock the provider HTTP call and run the full SDK wrap (auth,
+ * preflight, ingest). seed skips the SDK and POSTs straight to the public
+ * ingest endpoint in batches — fast, for populating the dashboard. Auth,
+ * ingest, budgets, anomaly cron all run against the real local server.
  */
 
 import { BudgetExceededError, createBursora, withTags, wrap } from "@bursora/sdk";
@@ -56,7 +65,40 @@ const ANOMALY_DEFAULTS: Options = {
     range: { promptMin: 180_000, promptMax: 220_000, completionMin: 45_000, completionMax: 55_000 },
 };
 
+interface SeedOptions {
+    readonly events: number;
+    readonly days: number;
+    readonly range: MockUsageRange;
+}
+
+const SEED_DEFAULTS: SeedOptions = {
+    events: 2_000,
+    days: 30,
+    range: START_DEFAULTS.range,
+};
+
+// Provider/model pairs that litellm prices (run `bun drizzle/seed.ts` in core
+// to populate the pricing table). Tenants/agents/workflows give the dashboard
+// groupings something to slice by.
+const SEED_MODELS: readonly { readonly provider: string; readonly model: string }[] = [
+    { provider: "openai", model: "gpt-4o" },
+    { provider: "openai", model: "gpt-4o-mini" },
+    { provider: "anthropic", model: "claude-sonnet-4-5" },
+    { provider: "anthropic", model: "claude-haiku-4-5" },
+    { provider: "google", model: "gemini-2.5-pro" },
+];
+const SEED_TENANTS = ["acme", "globex", "initech", "umbrella", "hooli"];
+const SEED_AGENTS = ["support-bot", "summarizer", "code-helper", "sales-copilot"];
+const SEED_WORKFLOWS = ["chat", "batch-embed", "nightly-report", "onboarding"];
+const SEED_BATCH = 500;
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const rand = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min;
+const pick = <T>(arr: readonly T[]): T => {
+    const value = arr[rand(0, arr.length - 1)];
+    if (value === undefined) throw new Error("pick: empty array");
+    return value;
+};
 
 function loadEnv(): Env {
     const endpoint = process.env.BURSORA_ENDPOINT;
@@ -94,16 +136,20 @@ function num(name: string, fallback: number): number {
     return n;
 }
 
+function parseRange(d: MockUsageRange): MockUsageRange {
+    return {
+        promptMin: num("prompt-min", d.promptMin),
+        promptMax: num("prompt-max", d.promptMax),
+        completionMin: num("completion-min", d.completionMin),
+        completionMax: num("completion-max", d.completionMax),
+    };
+}
+
 function parseOptions(d: Options): Options {
     return {
         calls: num("calls", d.calls),
         interval: num("interval", d.interval),
-        range: {
-            promptMin: num("prompt-min", d.range.promptMin),
-            promptMax: num("prompt-max", d.range.promptMax),
-            completionMin: num("completion-min", d.range.completionMin),
-            completionMax: num("completion-max", d.range.completionMax),
-        },
+        range: parseRange(d.range),
     };
 }
 
@@ -141,6 +187,42 @@ async function fireBatch(
     }
     await core.flush();
     return stats;
+}
+
+interface IngestEvent {
+    readonly provider: string;
+    readonly model: string;
+    readonly region: string;
+    readonly promptTokens: number;
+    readonly completionTokens: number;
+    readonly ts: string;
+    readonly tenantId?: string;
+    readonly agentId?: string;
+    readonly workflowId?: string;
+}
+
+/** POST a batch straight to the public ingest endpoint. Returns unpriced pairs. */
+async function ingest(env: Env, events: readonly IngestEvent[]): Promise<readonly string[]> {
+    const res = await fetch(`${env.endpoint}/api/v1/events`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-bursora-key": env.apiKey },
+        body: JSON.stringify({ events }),
+    });
+    if (!res.ok) {
+        throw new Error(`ingest failed: ${res.status} ${await res.text()}`);
+    }
+    const body: unknown = await res.json();
+    if (typeof body !== "object" || body === null || !("unpriced" in body)) return [];
+    const { unpriced } = body as { unpriced: unknown };
+    if (!Array.isArray(unpriced)) return [];
+    const out: string[] = [];
+    for (const u of unpriced) {
+        if (typeof u === "object" && u !== null && "provider" in u && "model" in u) {
+            const { provider, model } = u as { provider: unknown; model: unknown };
+            out.push(`${String(provider)}/${String(model)}`);
+        }
+    }
+    return out;
 }
 
 function printOptions(label: string, opts: Options, env: Env): void {
@@ -185,14 +267,7 @@ async function anomaly(env: Env): Promise<void> {
             agentId: ANOMALY_AGENT,
         };
     });
-    const res = await fetch(`${env.endpoint}/api/v1/events`, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-bursora-key": env.apiKey },
-        body: JSON.stringify({ events: baseline }),
-    });
-    if (!res.ok) {
-        throw new Error(`baseline ingest failed: ${res.status} ${await res.text()}`);
-    }
+    await ingest(env, baseline);
     console.log(`  seeded ${baseline.length} backdated baseline buckets`);
 
     const stats = await fireBatch(env, opts, ANOMALY_TAGS);
@@ -215,12 +290,64 @@ async function anomaly(env: Env): Promise<void> {
     console.log(`  ${env.endpoint}/workspace/${env.workspaceId}/alerts`);
 }
 
-function printUsage(): void {
-    console.log(`usage: bun run index.ts <start|anomaly> [flags]
+async function seed(env: Env): Promise<void> {
+    const events = num("events", SEED_DEFAULTS.events);
+    const days = num("days", SEED_DEFAULTS.days);
+    const range = parseRange(SEED_DEFAULTS.range);
 
-flags (both commands):
+    const windowMs = days * 24 * 60 * 60_000;
+    const startMs = Date.now() - windowMs;
+    console.log(`▶ seed — events=${events} days=${days}`);
+    console.log(
+        `  prompt=${range.promptMin}-${range.promptMax}  completion=${range.completionMin}-${range.completionMax}`,
+    );
+    console.log(`  endpoint=${env.endpoint}  workspace=${env.workspaceId}`);
+
+    const batch: IngestEvent[] = Array.from({ length: events }, () => {
+        const { provider, model } = pick(SEED_MODELS);
+        return {
+            provider,
+            model,
+            region: "global",
+            promptTokens: rand(range.promptMin, range.promptMax),
+            completionTokens: rand(range.completionMin, range.completionMax),
+            ts: new Date(startMs + Math.floor(Math.random() * windowMs)).toISOString(),
+            tenantId: pick(SEED_TENANTS),
+            agentId: pick(SEED_AGENTS),
+            workflowId: pick(SEED_WORKFLOWS),
+        };
+    });
+
+    const unpriced = new Set<string>();
+    let sent = 0;
+    for (let i = 0; i < batch.length; i += SEED_BATCH) {
+        const chunk = batch.slice(i, i + SEED_BATCH);
+        for (const u of await ingest(env, chunk)) unpriced.add(u);
+        sent += chunk.length;
+        process.stdout.write(`\r  ingested ${sent}/${batch.length}`);
+    }
+    process.stdout.write("\n");
+    if (unpriced.size > 0) {
+        console.log(
+            `  ⚠ unpriced, skipped (run 'bun drizzle/seed.ts' in core): ${[...unpriced].join(", ")}`,
+        );
+    }
+    console.log(`✓ sent ${sent} events across ${days}d`);
+    console.log(`  ${env.endpoint}/workspace/${env.workspaceId}/spend`);
+}
+
+function printUsage(): void {
+    console.log(`usage: bun run index.ts <start|anomaly|seed> [flags]
+
+start/anomaly:
   --calls N              total requests          (start=${START_DEFAULTS.calls},   anomaly=${ANOMALY_DEFAULTS.calls})
   --interval Nms         delay between requests  (start=${START_DEFAULTS.interval}, anomaly=${ANOMALY_DEFAULTS.interval})
+
+seed:
+  --events N             total events            (seed=${SEED_DEFAULTS.events})
+  --days N               spread back over N days (seed=${SEED_DEFAULTS.days})
+
+token ranges (all commands):
   --prompt-min N         min prompt tokens       (start=${START_DEFAULTS.range.promptMin},  anomaly=${ANOMALY_DEFAULTS.range.promptMin})
   --prompt-max N         max prompt tokens       (start=${START_DEFAULTS.range.promptMax}, anomaly=${ANOMALY_DEFAULTS.range.promptMax})
   --completion-min N     min completion tokens   (start=${START_DEFAULTS.range.completionMin},   anomaly=${ANOMALY_DEFAULTS.range.completionMin})
@@ -238,6 +365,7 @@ async function main(): Promise<void> {
     const command = argv[0];
     if (command === "start") await start(env);
     else if (command === "anomaly") await anomaly(env);
+    else if (command === "seed") await seed(env);
     else {
         console.error(`unknown command: ${command}`);
         printUsage();

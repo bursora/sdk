@@ -5,7 +5,8 @@
     "type": "module",
     "scripts": {
         "start": "bun run index.ts start",
-        "anomaly": "bun run index.ts anomaly"
+        "anomaly": "bun run index.ts anomaly",
+        "seed": "bun run index.ts seed"
     },
     "dependencies": {
         "@bursora/sdk": "file:.."
