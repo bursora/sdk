@@ -4,11 +4,10 @@
     "private": true,
     "type": "module",
     "scripts": {
-        "start": "bun run index.ts start",
-        "anomaly": "bun run index.ts anomaly",
-        "seed": "bun run index.ts seed"
+        "start": "bun run index.ts"
     },
     "dependencies": {
-        "@bursora/sdk": "file:.."
+        "@bursora/sdk": "file:..",
+        "@clack/prompts": "^1.5.1"
     }
 }

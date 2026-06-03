@@ -1,6 +1,17 @@
 # Bursora SDK Playground
 
-Three commands. `start` and `anomaly` mock the provider HTTP call and run the full SDK wrap; `seed` skips the SDK and bulk-POSTs straight to the ingest endpoint to fill the dashboard fast. Auth, ingest, budgets, and the anomaly cron all run against the real local server.
+One command, an interactive wizard. Pick a mode, fill in the values (defaults pre-filled, enter to accept), and it runs.
+
+```bash
+bun run start
+```
+
+Two modes:
+
+- **seed** — bulk-fill the dashboard with backdated events. POSTs straight to the ingest endpoint in batches, so 10k+ events land in seconds. Spread across a mix of tenants, agents, workflows, and models so the dashboard groupings fill out.
+- **anomaly** — seed a low backdated baseline, fire a spike through the full SDK wrap, then trigger the anomaly cron so the alert fires.
+
+Auth, ingest, budgets, and the anomaly cron all run against the real local server.
 
 ## Setup
 
@@ -13,51 +24,19 @@ cp .env.example .env  # then edit
 
 - `BURSORA_ENDPOINT` — local dev URL (`http://localhost:3000`)
 - `BURSORA_API_KEY` — plaintext secret (`bsk_<workspaceId>_<32hex>`) from `/workspace/<id>/keys`
-- `BURSORA_CRON_SECRET` — must match the server's `.env`; required to auto-trigger the anomaly cron
+- `BURSORA_CRON_SECRET` — must match the server's `.env`; required for the anomaly mode to auto-trigger the cron
 
-## Commands
+## Values
 
-```bash
-bun run start      # fire calls through the wrapped mock client
-bun run anomaly    # seed baseline + spike, trigger anomaly cron
-bun run seed       # bulk-fill the DB with backdated events
-```
+| Value                  | Mode    | Default | Meaning                                       |
+| ---------------------- | ------- | ------- | --------------------------------------------- |
+| events                 | seed    | 2000    | total events to ingest                        |
+| days                   | seed    | 30      | spread events back over N days                |
+| spike calls            | anomaly | 5       | requests fired through the SDK wrap           |
+| delay between calls    | anomaly | 100     | ms between spike calls                        |
+| min/max tokens/request | both    | varies  | request size band; bigger band, costlier call |
 
-## Flags
-
-`start` / `anomaly`:
-
-| Flag              | Default (start) | Default (anomaly) |
-| ----------------- | --------------- | ----------------- |
-| `--calls`         | 30              | 5                 |
-| `--interval` (ms) | 200             | 100               |
-
-`seed`:
-
-| Flag       | Default |
-| ---------- | ------- |
-| `--events` | 2000    |
-| `--days`   | 30      |
-
-Token ranges (all commands):
-
-| Flag               | Default (start/seed) | Default (anomaly) |
-| ------------------ | -------------------- | ----------------- |
-| `--prompt-min`     | 200                  | 180000            |
-| `--prompt-max`     | 2500                 | 220000            |
-| `--completion-min` | 50                   | 45000             |
-| `--completion-max` | 800                  | 55000             |
-
-`seed` spreads events randomly across the last `--days` and across a mix of tenants, agents, workflows, and models so the dashboard groupings fill out. It batches 500 events per request straight to the ingest endpoint, so 10k+ events land in seconds.
-
-Examples:
-
-```bash
-bun run start -- --calls 100 --interval 50
-bun run anomaly -- --calls 10 --prompt-max 300000
-bun run seed -- --events 10000 --days 30
-bun run seed -- --events 50000 --days 7 --prompt-max 8000
-```
+`min/max tokens per request` sets how big each request is, which sets its cost. Defaults are small for `seed` (250–3000) and large for `anomaly` (300k–400k) so the spike clears the detector's per-call floor.
 
 After it finishes:
 
