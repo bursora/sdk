@@ -148,4 +148,4 @@ Sign in at [bursora.com](https://bursora.com) to get your `BURSORA_API_KEY`.
 
 ## License
 
-Apache License 2.0. Copyright (c) 2026 Vildan Bina.
+MIT License. Copyright (c) 2026 Vildan Bina.

@@ -32,7 +32,7 @@ bun run check
 - Branch off `main`. Keep the diff focused; one feature or fix per PR.
 - Add or update tests for any behavior change.
 - Match the existing TypeScript style; no new dependencies without discussion.
-- No CLA. Apache 2.0 covers the contribution.
+- No CLA. The MIT License covers the contribution.
 
 ## Bugs and feature requests
 
