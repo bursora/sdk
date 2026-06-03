@@ -23,6 +23,7 @@ const HOST_VENDORS: readonly (readonly [string, string])[] = [
     ["openrouter.ai", "openrouter"],
     ["ai-gateway.vercel.sh", "vercel"],
     ["localhost:11434", "ollama"],
+    ["api.anthropic.com", "anthropic"],
     ["generativelanguage.googleapis.com", "google"],
     ["api.openai.com", "openai"],
 ];

@@ -213,4 +213,197 @@ describe("real anthropic through wrap() — only the network is mocked", () => {
         expect(h.events[0]?.errored).toBe(true);
         expect(h.events[0]?.provider).toBe("anthropic");
     });
+
+    test("messages.stream() helper records one event summing named-SSE usage", async () => {
+        const client = new Anthropic({
+            apiKey: "test",
+            maxRetries: 0,
+            fetch: recordingFetch([], () => Promise.resolve(sseResponse(STREAM_BODY))),
+        });
+        const h = buildFakeCore(ALLOW);
+        const wrapped = wrap(client, h.core);
+
+        const stream = wrapped.messages.stream({
+            model: MODEL,
+            max_tokens: 64,
+            messages: [{ role: "user", content: "hi" }],
+        });
+        const collected: string[] = [];
+        for await (const event of stream) {
+            if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+                collected.push(event.delta.text);
+            }
+        }
+
+        expect(collected).toEqual(["hi"]);
+        expect(h.events).toHaveLength(1);
+        expect(h.events[0]?.provider).toBe("anthropic");
+        expect(h.events[0]?.model).toBe(MODEL);
+        expect(h.events[0]?.promptTokens).toBe(12);
+        expect(h.events[0]?.completionTokens).toBe(8);
+        expect(h.events[0]?.cacheTokens).toBe(300);
+    });
+
+    test("messages.stream() records usage even when consumed only via finalMessage()", async () => {
+        const client = new Anthropic({
+            apiKey: "test",
+            maxRetries: 0,
+            fetch: recordingFetch([], () => Promise.resolve(sseResponse(STREAM_BODY))),
+        });
+        const h = buildFakeCore(ALLOW);
+        const wrapped = wrap(client, h.core);
+
+        const stream = wrapped.messages.stream({
+            model: MODEL,
+            max_tokens: 64,
+            messages: [{ role: "user", content: "hi" }],
+        });
+        const final = await stream.finalMessage();
+
+        expect(final.id).toBe("msg_real_stream");
+        expect(h.events).toHaveLength(1);
+        expect(h.events[0]?.promptTokens).toBe(12);
+        expect(h.events[0]?.completionTokens).toBe(8);
+        expect(h.events[0]?.cacheTokens).toBe(300);
+    });
+
+    test("messages.stream() returns the MessageStream untouched, not a Promise", async () => {
+        const client = new Anthropic({
+            apiKey: "test",
+            maxRetries: 0,
+            fetch: recordingFetch([], () => Promise.resolve(sseResponse(STREAM_BODY))),
+        });
+        const h = buildFakeCore(ALLOW);
+        const wrapped = wrap(client, h.core);
+
+        const stream = wrapped.messages.stream({
+            model: MODEL,
+            max_tokens: 64,
+            messages: [{ role: "user", content: "hi" }],
+        });
+
+        expect(typeof stream.on).toBe("function");
+        expect(typeof stream.finalMessage).toBe("function");
+        expect(typeof (stream as unknown as { then?: unknown }).then).not.toBe("function");
+        await stream.done();
+    });
+});
+
+// Minimal stand-in for Anthropic's MessageStream: an event emitter we can drive
+// synchronously, so the tap's accumulation, settle-once guard, and object
+// identity are tested without the real SDK's async timing.
+class FakeMessageStream {
+    private readonly listeners: Record<string, ((...args: unknown[]) => void)[]> = {};
+    on(event: string, listener: (...args: unknown[]) => void): this {
+        (this.listeners[event] ??= []).push(listener);
+        return this;
+    }
+    emit(event: string, ...args: unknown[]): void {
+        for (const listener of this.listeners[event] ?? []) listener(...args);
+    }
+}
+
+describe("anthropic manifest wiring — mocked clients", () => {
+    test("messages.parse records one event from the response usage", async () => {
+        const client = {
+            messages: {
+                create: async () => ({}),
+                parse: async (_args: unknown) => ({
+                    id: "msg_parse",
+                    usage: { input_tokens: 5, output_tokens: 7 },
+                }),
+            },
+        };
+        const h = buildFakeCore(ALLOW);
+        const wrapped = wrap(client, h.core);
+
+        const out = await wrapped.messages.parse({ model: MODEL, messages: [] });
+
+        expect((out as { id: string }).id).toBe("msg_parse");
+        expect(h.events).toHaveLength(1);
+        expect(h.events[0]?.provider).toBe("anthropic");
+        expect(h.events[0]?.promptTokens).toBe(5);
+        expect(h.events[0]?.completionTokens).toBe(7);
+    });
+
+    test("beta.messages.create records an event tagged anthropic", async () => {
+        const client = {
+            messages: { create: async () => ({}) },
+            beta: {
+                messages: {
+                    create: async (_args: unknown) => ({
+                        id: "beta_1",
+                        usage: { input_tokens: 3, output_tokens: 4 },
+                    }),
+                },
+            },
+        };
+        const h = buildFakeCore(ALLOW);
+        const wrapped = wrap(client, h.core);
+
+        const out = await wrapped.beta.messages.create({ model: MODEL, messages: [] });
+
+        expect((out as { id: string }).id).toBe("beta_1");
+        expect(h.events).toHaveLength(1);
+        expect(h.events[0]?.provider).toBe("anthropic");
+        expect(h.events[0]?.promptTokens).toBe(3);
+        expect(h.events[0]?.completionTokens).toBe(4);
+    });
+
+    test("messages.stream() taps usage and returns the stream object untouched", () => {
+        const fake = new FakeMessageStream();
+        const client = {
+            messages: { create: async () => ({}), stream: (_args: unknown) => fake },
+        };
+        const h = buildFakeCore(ALLOW);
+        const wrapped = wrap(client, h.core);
+
+        const returned = wrapped.messages.stream({ model: MODEL, messages: [] });
+        expect(returned).toBe(fake);
+
+        fake.emit("streamEvent", {
+            type: "message_start",
+            message: {
+                id: "s1",
+                usage: {
+                    input_tokens: 12,
+                    output_tokens: 0,
+                    cache_creation_input_tokens: 100,
+                    cache_read_input_tokens: 200,
+                },
+            },
+        });
+        fake.emit("streamEvent", { type: "message_delta", usage: { output_tokens: 8 } });
+        fake.emit("streamEvent", { type: "message_stop" });
+        expect(h.events).toHaveLength(0);
+
+        fake.emit("end");
+        expect(h.events).toHaveLength(1);
+        expect(h.events[0]?.promptTokens).toBe(12);
+        expect(h.events[0]?.completionTokens).toBe(8);
+        expect(h.events[0]?.cacheTokens).toBe(300);
+        expect(h.events[0]?.requestId).toBe("s1");
+        expect(h.events[0]?.errored).toBeUndefined();
+    });
+
+    test("messages.stream() settles once; error then chained end records one errored event", () => {
+        const fake = new FakeMessageStream();
+        const client = {
+            messages: { create: async () => ({}), stream: (_args: unknown) => fake },
+        };
+        const h = buildFakeCore(ALLOW);
+        const wrapped = wrap(client, h.core);
+
+        wrapped.messages.stream({ model: MODEL, messages: [] });
+        fake.emit("streamEvent", {
+            type: "message_start",
+            message: { usage: { input_tokens: 5 } },
+        });
+        fake.emit("error");
+        fake.emit("end");
+
+        expect(h.events).toHaveLength(1);
+        expect(h.events[0]?.errored).toBe(true);
+        expect(h.events[0]?.promptTokens).toBe(5);
+    });
 });

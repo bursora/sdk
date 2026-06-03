@@ -20,11 +20,19 @@ import type { EventsClient } from "./internal/events";
 import { type MethodHolder, resolvePath } from "./internal/path-resolver";
 import { providerFromBaseURL } from "./internal/provider-from-base-url";
 import { buildProxy } from "./internal/proxy-builder";
-import { type DecisionLookup, wrapCall } from "./internal/wrap-call";
+import { type DecisionLookup, wrapCall, wrapEventStreamCall } from "./internal/wrap-call";
 import { anthropicManifest } from "./providers/anthropic";
 import { googleManifest } from "./providers/google";
 import { openaiManifest } from "./providers/openai";
-import type { BudgetSnapshot, Decision, MethodSpec, ProviderManifest, Tags } from "./types";
+import type {
+    BudgetSnapshot,
+    Decision,
+    FactoryMethodSpec,
+    FactorySpec,
+    MethodSpec,
+    ProviderManifest,
+    Tags,
+} from "./types";
 
 /** @internal SDK internals; not part of the stable public API. */
 export type { EventsClient, SetupErrorInput, SetupErrorKind } from "./internal/events";
@@ -110,6 +118,18 @@ export function wrap<T extends object>(
         ]);
     }
 
+    // Factory methods (e.g. `chats.create`) return a stateful object the flat
+    // path list can't reach. Install a leaf at the factory path that wraps the
+    // returned object's methods with the model captured from the factory call.
+    for (const factory of manifest.factories ?? []) {
+        const target = resolvePath(client, factory.path);
+        if (target === undefined) continue;
+        leaves.push([
+            factory.path.join("."),
+            wrapFactory(target, factory, client, manifest.provider, core, snapshotTap),
+        ]);
+    }
+
     return buildProxy(client, {
         leaves,
         lifecycle: {
@@ -131,19 +151,104 @@ function wrapMethod(
     fallbackProvider: string,
     core: BursoraCore,
     decisionLookup: DecisionLookup,
-): (args: unknown) => Promise<unknown> {
+): (args: unknown) => unknown {
+    const extractCallMeta = (args: unknown) => {
+        const meta = spec.extractMeta(args);
+        return {
+            provider: providerFromBaseURL(client, fallbackProvider),
+            model: meta.model,
+            isStream: meta.isStream,
+        };
+    };
+
+    // Sync-returning event-emitter streams (Anthropic `messages.stream()`) can't
+    // go through the async `wrapCall`: awaiting would turn the synchronous
+    // return into a Promise and strip the stream's `.on()` / `.finalMessage()`
+    // surface. Tap its events and hand the original object back instead.
+    if (spec.attachEventStream !== undefined) {
+        return wrapEventStreamCall<unknown, unknown>(
+            (args) => holder.fn.call(holder.thisArg, args),
+            {
+                eventsClient: core.events,
+                now: core.now,
+                extractCallMeta,
+                attachEventStream: spec.attachEventStream,
+                ...(spec.createStreamHandler === undefined
+                    ? {}
+                    : { createStreamHandler: spec.createStreamHandler }),
+            },
+        );
+    }
+
     return wrapCall<unknown, unknown>((args) => holder.fn.call(holder.thisArg, args), {
         decisionClient: decisionLookup,
         eventsClient: core.events,
         now: core.now,
-        extractCallMeta: (args) => {
-            const meta = spec.extractMeta(args);
-            return {
-                provider: providerFromBaseURL(client, fallbackProvider),
-                model: meta.model,
-                isStream: meta.isStream,
-            };
-        },
+        extractCallMeta,
+        extractUsage: (res) => spec.extractUsage(res),
+        ...(spec.createStreamHandler === undefined
+            ? {}
+            : { createStreamHandler: spec.createStreamHandler }),
+    });
+}
+
+// `chats.create` is synchronous: it returns the stateful `Chat` immediately.
+// Call it, capture the model bound at create time, then proxy the returned
+// object so its instrumented methods route through the lifecycle. Unlisted
+// methods (history, etc.) fall through to the original via buildProxy.
+function wrapFactory(
+    holder: MethodHolder,
+    factory: FactorySpec,
+    client: object,
+    fallbackProvider: string,
+    core: BursoraCore,
+    decisionLookup: DecisionLookup,
+): (args: unknown) => unknown {
+    return (args: unknown) => {
+        const created = holder.fn.call(holder.thisArg, args) as object;
+        const model = factory.extractModel(args);
+        const leaves: [string, unknown][] = [];
+        for (const fm of factory.methods) {
+            const method = (created as Record<string, unknown>)[fm.name];
+            if (typeof method !== "function") continue;
+            leaves.push([
+                fm.name,
+                wrapFactoryMethod(
+                    method as (a: unknown) => Promise<unknown>,
+                    created,
+                    fm,
+                    model,
+                    client,
+                    fallbackProvider,
+                    core,
+                    decisionLookup,
+                ),
+            ]);
+        }
+        return buildProxy(created, { leaves, lifecycle: {} });
+    };
+}
+
+function wrapFactoryMethod(
+    fn: (args: unknown) => Promise<unknown>,
+    thisArg: object,
+    spec: FactoryMethodSpec,
+    model: string,
+    client: object,
+    fallbackProvider: string,
+    core: BursoraCore,
+    decisionLookup: DecisionLookup,
+): (args: unknown) => Promise<unknown> {
+    return wrapCall<unknown, unknown>((args) => fn.call(thisArg, args), {
+        decisionClient: decisionLookup,
+        eventsClient: core.events,
+        now: core.now,
+        // Model is bound at factory time, so the per-call args are ignored here.
+        extractCallMeta: () => ({
+            provider: providerFromBaseURL(client, fallbackProvider),
+            model,
+            isStream: spec.isStream,
+        }),
         extractUsage: (res) => spec.extractUsage(res),
         ...(spec.createStreamHandler === undefined
             ? {}

@@ -28,6 +28,8 @@ const ALLOW: Decision = { allow: true, mode: "notify", reason: "ok", ttl_s: 60 }
 const BLOCK: Decision = { allow: false, mode: "block", reason: "cap", ttl_s: 60 };
 
 const MODEL = "gemini-2.5-flash";
+const EMBED_MODEL = "gemini-embedding-001";
+const IMAGE_MODEL = "imagen-4.0-generate-001";
 
 const NON_STREAM_BODY = {
     candidates: [{ content: { parts: [{ text: "hi" }] }, finishReason: "STOP" }],
@@ -39,6 +41,24 @@ const NON_STREAM_BODY = {
         thoughtsTokenCount: 2,
     },
 };
+
+// Tool-execution input tokens (`toolUsePromptTokenCount`) are a separate addend
+// in `totalTokenCount`, billed at the input rate. They fold into the prompt.
+const TOOL_USE_BODY = {
+    candidates: [{ content: { parts: [{ text: "hi" }] }, finishReason: "STOP" }],
+    usageMetadata: {
+        promptTokenCount: 10,
+        toolUsePromptTokenCount: 5,
+        candidatesTokenCount: 3,
+        thoughtsTokenCount: 2,
+        cachedContentTokenCount: 4,
+        totalTokenCount: 24,
+    },
+};
+
+// `:embedContent` and `:predict` (Imagen) responses carry no usageMetadata.
+const EMBED_BODY = { embeddings: [{ values: [0.1, 0.2, 0.3] }] };
+const IMAGE_BODY = { predictions: [{ bytesBase64Encoded: "aGk=", mimeType: "image/png" }] };
 
 // Google's wire SSE carries no `[DONE]` sentinel, so the data-frames are
 // hand-rolled here rather than built with the shared OpenAI-style `sse()`.
@@ -94,6 +114,115 @@ describe("real @google/genai through wrap() — only the network is mocked", () 
         // 3 candidates + 2 thoughts = 5
         expect(h.events[0]?.completionTokens).toBe(5);
         expect(h.events[0]?.cacheTokens).toBe(4);
+    });
+
+    test("generateContent folds tool-use input tokens into the prompt count", async () => {
+        stubFetch(() => jsonResponse(TOOL_USE_BODY));
+        const h = buildFakeCore(ALLOW);
+        const wrapped = wrap(new GoogleGenAI({ apiKey: "test" }), h.core);
+
+        await wrapped.models.generateContent({ model: MODEL, contents: "hi" });
+
+        expect(h.events).toHaveLength(1);
+        // (10 prompt + 5 tool-use) - 4 cached = 11 uncached
+        expect(h.events[0]?.promptTokens).toBe(11);
+        // 3 candidates + 2 thoughts = 5
+        expect(h.events[0]?.completionTokens).toBe(5);
+        expect(h.events[0]?.cacheTokens).toBe(4);
+    });
+
+    test("embedContent records one event with zero tokens (no usage reported)", async () => {
+        stubFetch(() => jsonResponse(EMBED_BODY));
+        const h = buildFakeCore(ALLOW);
+        const wrapped = wrap(new GoogleGenAI({ apiKey: "test" }), h.core);
+
+        const out = await wrapped.models.embedContent({ model: EMBED_MODEL, contents: "hi" });
+
+        expect(out.embeddings?.[0]?.values).toEqual([0.1, 0.2, 0.3]);
+        expect(calls).toHaveLength(1);
+        // The SDK routes a single embedContent call to the batch wire endpoint.
+        expect(calls[0]).toContain(`${EMBED_MODEL}:batchEmbedContents`);
+        expect(h.events).toHaveLength(1);
+        expect(h.events[0]?.provider).toBe("google");
+        expect(h.events[0]?.model).toBe(EMBED_MODEL);
+        expect(h.events[0]?.promptTokens).toBe(0);
+        expect(h.events[0]?.completionTokens).toBe(0);
+        expect(h.events[0]?.cacheTokens).toBeUndefined();
+    });
+
+    test("generateImages records one event with zero tokens (Imagen bills per image)", async () => {
+        stubFetch(() => jsonResponse(IMAGE_BODY));
+        const h = buildFakeCore(ALLOW);
+        const wrapped = wrap(new GoogleGenAI({ apiKey: "test" }), h.core);
+
+        const out = await wrapped.models.generateImages({ model: IMAGE_MODEL, prompt: "a cat" });
+
+        expect(out.generatedImages).toHaveLength(1);
+        expect(calls).toHaveLength(1);
+        expect(calls[0]).toContain(`${IMAGE_MODEL}:predict`);
+        expect(h.events).toHaveLength(1);
+        expect(h.events[0]?.provider).toBe("google");
+        expect(h.events[0]?.model).toBe(IMAGE_MODEL);
+        expect(h.events[0]?.promptTokens).toBe(0);
+        expect(h.events[0]?.completionTokens).toBe(0);
+    });
+
+    test("chats.create().sendMessage records one event with the model bound at create", async () => {
+        stubFetch(() => jsonResponse(NON_STREAM_BODY));
+        const h = buildFakeCore(ALLOW);
+        const wrapped = wrap(new GoogleGenAI({ apiKey: "test" }), h.core);
+
+        const chat = wrapped.chats.create({ model: MODEL });
+        const out = await chat.sendMessage({ message: "hi" });
+
+        expect(out.text).toBe("hi");
+        expect(calls).toHaveLength(1);
+        expect(calls[0]).toContain(`${MODEL}:generateContent`);
+        expect(h.events).toHaveLength(1);
+        expect(h.events[0]?.provider).toBe("google");
+        expect(h.events[0]?.model).toBe(MODEL);
+        expect(h.events[0]?.promptTokens).toBe(6);
+        expect(h.events[0]?.completionTokens).toBe(5);
+        expect(h.events[0]?.cacheTokens).toBe(4);
+    });
+
+    test("chats.create().sendMessageStream records one event from the terminal chunk", async () => {
+        stubFetch(() => sseResponse(STREAM_BODY));
+        const h = buildFakeCore(ALLOW);
+        const wrapped = wrap(new GoogleGenAI({ apiKey: "test" }), h.core);
+
+        const chat = wrapped.chats.create({ model: MODEL });
+        const stream = await chat.sendMessageStream({ message: "hi" });
+        const collected: string[] = [];
+        for await (const chunk of stream) {
+            const text = chunk.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (text) collected.push(text);
+        }
+
+        expect(collected).toEqual(["He", "llo"]);
+        expect(calls[0]).toContain(`${MODEL}:streamGenerateContent?alt=sse`);
+        expect(h.events).toHaveLength(1);
+        expect(h.events[0]?.model).toBe(MODEL);
+        expect(h.events[0]?.promptTokens).toBe(9);
+        expect(h.events[0]?.completionTokens).toBe(12);
+        expect(h.events[0]?.cacheTokens).toBe(3);
+    });
+
+    test("editImage is instrumented: rejects on a Developer API client and records an errored event", async () => {
+        stubFetch(() => jsonResponse(IMAGE_BODY));
+        const h = buildFakeCore(ALLOW);
+        const wrapped = wrap(new GoogleGenAI({ apiKey: "test" }), h.core);
+
+        // editImage is Vertex-AI / GEAP only; the SDK rejects it on a
+        // Developer-API client. The proxy still installed the leaf and ran the
+        // lifecycle, so the failed attempt is recorded.
+        await expect(
+            wrapped.models.editImage({ model: IMAGE_MODEL, prompt: "x", referenceImages: [] }),
+        ).rejects.toThrow();
+        expect(h.events).toHaveLength(1);
+        expect(h.events[0]?.provider).toBe("google");
+        expect(h.events[0]?.model).toBe(IMAGE_MODEL);
+        expect(h.events[0]?.errored).toBe(true);
     });
 
     test("streaming records one event with usage from the terminal chunk", async () => {

@@ -1,9 +1,18 @@
 /**
  * Anthropic provider manifest consumed by the generic `wrap()` engine.
  *
- * Declares the one instrumented method (`messages.create`), how to read
- * model + stream flag from its args, and how to turn its response (or
- * streamed chunks) into usage totals.
+ * Instrumented methods (each bills by token and reuses the same usage
+ * extractor / stream handler):
+ *  - `messages.create` — the core Messages call, streaming or not.
+ *  - `messages.parse` — structured-output variant of create.
+ *  - `messages.stream()` — the convenience streaming helper that returns a
+ *    `MessageStream` event emitter (see the tap below).
+ *  - `beta.messages.create` / `.parse` / `.stream` — the beta-namespace mirror
+ *    power users hit for newer features; identical usage shape.
+ *
+ * The token-counting endpoint (`messages.countTokens`) is free, and Message
+ * Batches report usage only when results are fetched asynchronously, so neither
+ * is instrumented here.
  *
  * Anthropic SSE quirks worth knowing:
  *  - `message_start.message.usage.input_tokens` is the prompt count;
@@ -17,7 +26,13 @@
  */
 
 import { structurallyMatches } from "../internal/detect";
-import type { MethodSpec, ProviderManifest, UsageDelta, UsageTotals } from "../types";
+import type {
+    EventStreamHooks,
+    MethodSpec,
+    ProviderManifest,
+    UsageDelta,
+    UsageTotals,
+} from "../types";
 
 const PROVIDER = "anthropic";
 
@@ -100,14 +115,85 @@ export function createAnthropicStreamHandler(): (chunk: unknown) => UsageDelta |
     };
 }
 
+// `messages.stream()` returns a `MessageStream` EventEmitter that pumps the HTTP
+// response to completion on its own and emits a terminal `end` exactly once —
+// after every `streamEvent`, and after `error`/`abort` (which each chain into
+// `end`). Tapping these four events captures usage for any consumption style
+// (iterate, `.on()`, `.finalMessage()`, early break) without replacing the
+// object, so the caller keeps the full MessageStream API. `streamEvent` carries
+// the same raw chunk shape `createAnthropicStreamHandler` already decodes.
+interface MessageStreamLike {
+    on(event: string, listener: (...args: unknown[]) => void): unknown;
+}
+
+function attachMessageStream(stream: object, hooks: EventStreamHooks): void {
+    const s = stream as MessageStreamLike;
+    s.on("streamEvent", (event) => hooks.onChunk(event));
+    s.on("error", () => hooks.onSettle(true));
+    s.on("abort", () => hooks.onSettle(true));
+    s.on("end", () => hooks.onSettle(false));
+}
+
+const messagesMeta = (args: MessagesArgs): { model: string; isStream: boolean } => ({
+    model: args.model,
+    isStream: args.stream === true,
+});
+
 const messagesCreate: MethodSpec<MessagesArgs, MessagesResponse, AnthropicStreamChunk> = {
     path: ["messages", "create"],
-    extractMeta: (args) => ({ model: args.model, isStream: args.stream === true }),
+    extractMeta: messagesMeta,
     extractUsage: messagesUsage,
     createStreamHandler: createAnthropicStreamHandler,
 };
 
-const anthropicMethods: readonly MethodSpec[] = [messagesCreate as MethodSpec];
+const messagesParse: MethodSpec<MessagesArgs, MessagesResponse> = {
+    path: ["messages", "parse"],
+    optional: true,
+    extractMeta: (args) => ({ model: args.model, isStream: false }),
+    extractUsage: messagesUsage,
+};
+
+const messagesStream: MethodSpec<MessagesArgs, MessagesResponse, AnthropicStreamChunk> = {
+    path: ["messages", "stream"],
+    optional: true,
+    extractMeta: (args) => ({ model: args.model, isStream: true }),
+    extractUsage: messagesUsage,
+    createStreamHandler: createAnthropicStreamHandler,
+    attachEventStream: attachMessageStream,
+};
+
+const betaMessagesCreate: MethodSpec<MessagesArgs, MessagesResponse, AnthropicStreamChunk> = {
+    path: ["beta", "messages", "create"],
+    optional: true,
+    extractMeta: messagesMeta,
+    extractUsage: messagesUsage,
+    createStreamHandler: createAnthropicStreamHandler,
+};
+
+const betaMessagesParse: MethodSpec<MessagesArgs, MessagesResponse> = {
+    path: ["beta", "messages", "parse"],
+    optional: true,
+    extractMeta: (args) => ({ model: args.model, isStream: false }),
+    extractUsage: messagesUsage,
+};
+
+const betaMessagesStream: MethodSpec<MessagesArgs, MessagesResponse, AnthropicStreamChunk> = {
+    path: ["beta", "messages", "stream"],
+    optional: true,
+    extractMeta: (args) => ({ model: args.model, isStream: true }),
+    extractUsage: messagesUsage,
+    createStreamHandler: createAnthropicStreamHandler,
+    attachEventStream: attachMessageStream,
+};
+
+const anthropicMethods: readonly MethodSpec[] = [
+    messagesCreate as MethodSpec,
+    messagesParse as MethodSpec,
+    messagesStream as MethodSpec,
+    betaMessagesCreate as MethodSpec,
+    betaMessagesParse as MethodSpec,
+    betaMessagesStream as MethodSpec,
+];
 
 export const anthropicManifest: ProviderManifest = {
     provider: PROVIDER,

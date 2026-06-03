@@ -13,7 +13,7 @@
  */
 
 import { currentTags } from "../tags";
-import type { Tags, UsageDelta, UsageTotals } from "../types";
+import type { EventStreamHooks, Tags, UsageDelta, UsageTotals } from "../types";
 import { type EventsClient, safeFlush } from "./events";
 import { buildEventInput, type DecisionLookup, preflightGate } from "./lifecycle";
 
@@ -98,6 +98,90 @@ function emitErrored(
     startedAt: number,
 ): void {
     eventsClient.record(buildEventInput(meta, tags, startedAt, now(), null, true));
+}
+
+export interface WrapEventStreamOptions<Args> {
+    readonly extractCallMeta: (args: Args) => CallMeta;
+    readonly createStreamHandler?: () => StreamChunkHandler;
+    readonly attachEventStream: (stream: object, hooks: EventStreamHooks) => void;
+    readonly eventsClient: EventsClient;
+    readonly now: () => number;
+}
+
+/**
+ * Wraps a synchronous, event-emitting stream method (Anthropic's
+ * `messages.stream()` → `MessageStream`). Unlike `wrapCall`, this never awaits:
+ * the provider method fires its request synchronously, so there is no seam to
+ * run a block gate before it — the call is metered, not pre-gated. The returned
+ * stream object is handed back untouched; usage is captured by listeners the
+ * provider attaches via `attachEventStream`, which feeds chunks through
+ * `onChunk` and signals completion once through `onSettle`.
+ */
+export function wrapEventStreamCall<Args, Response>(
+    call: (args: Args) => Response,
+    opts: WrapEventStreamOptions<Args>,
+): (args: Args) => Response {
+    return (args: Args): Response => {
+        const tags = currentTags();
+        const meta = opts.extractCallMeta(args);
+        const startedAt = opts.now();
+        const stream = call(args);
+
+        const handler = opts.createStreamHandler?.();
+        let prompt = 0;
+        let completion = 0;
+        let cache = 0;
+        let requestId: string | undefined;
+        let settled = false;
+
+        opts.attachEventStream(stream as object, {
+            onChunk: (raw: unknown): void => {
+                if (handler === undefined) return;
+                let delta: UsageDelta | null;
+                try {
+                    delta = handler(raw);
+                } catch {
+                    // A throwing handler must never poison the user's stream;
+                    // drop the chunk and keep the totals as-is.
+                    return;
+                }
+                if (delta === null) return;
+                prompt += delta.promptTokensDelta;
+                completion += delta.completionTokensDelta;
+                cache += delta.cacheTokensDelta ?? 0;
+                if (requestId === undefined && delta.requestId !== undefined) {
+                    requestId = delta.requestId;
+                }
+            },
+            // Settle once: the terminal `end` fires after every chunk, and after
+            // `error`/`abort` (which chain into it), so the first signal wins and
+            // any later `end` is ignored.
+            onSettle: (errored: boolean): void => {
+                if (settled) return;
+                settled = true;
+                opts.eventsClient.record(
+                    buildEventInput(
+                        meta,
+                        tags,
+                        startedAt,
+                        opts.now(),
+                        {
+                            promptTokens: prompt,
+                            completionTokens: completion,
+                            ...(cache > 0 ? { cacheTokens: cache } : {}),
+                            ...(requestId !== undefined ? { requestId } : {}),
+                        },
+                        errored,
+                    ),
+                );
+                // Can't await in a sync listener; the queued event flushes
+                // best-effort, mirroring the non-stream path's commit.
+                void safeFlush(opts.eventsClient);
+            },
+        });
+
+        return stream;
+    };
 }
 
 function isAsyncIterable<T>(x: unknown): x is AsyncIterable<T> {

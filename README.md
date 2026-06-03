@@ -53,8 +53,9 @@ const anthropic = wrap(new Anthropic(), { apiKey, endpoint });
 ```
 
 Google Gemini's native client (`@google/genai`) is detected by shape too. Wrap
-it the same way; calls go through `models.generateContent` and
-`models.generateContentStream`.
+it the same way; instrumented methods are `models.generateContent`,
+`models.generateContentStream`, `models.embedContent`, `models.generateImages`,
+and the `chats.create(...)` chat (`sendMessage` / `sendMessageStream`).
 
 ```ts
 import { GoogleGenAI } from "@google/genai";

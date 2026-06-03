@@ -55,6 +55,15 @@ const anthropicShape = () => ({
     },
 });
 
+const googleShape = () => ({
+    models: {
+        generateContent: async (_args: unknown) => ({
+            responseId: "g1",
+            usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+        }),
+    },
+});
+
 describe("wrap() — provider detection", () => {
     test("detects an OpenAI-shaped client", async () => {
         const core = buildCore();
@@ -77,6 +86,17 @@ describe("wrap() — provider detection", () => {
             messages: [{ role: "user", content: "hi" }],
         })) as { id: string };
         expect(out.id).toBe("m1");
+    });
+
+    test("detects a Google-shaped client", async () => {
+        const core = buildCore();
+        const client = googleShape();
+        const wrapped = wrap(client, core);
+        const out = (await wrapped.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: "hi",
+        })) as { responseId: string };
+        expect(out.responseId).toBe("g1");
     });
 
     test("throws a clear error on a plain {} client", () => {

@@ -89,6 +89,17 @@ export interface UsageDelta {
 }
 
 /**
+ * Listener hooks the engine hands to an event-stream method's
+ * `attachEventStream`. `onChunk` feeds one raw provider event into the usage
+ * accumulator; `onSettle` is called once when the stream terminates (`errored`
+ * flags an abnormal end).
+ */
+export interface EventStreamHooks {
+    readonly onChunk: (chunk: unknown) => void;
+    readonly onSettle: (errored: boolean) => void;
+}
+
+/**
  * Declarative description of a single provider method to instrument. The
  * generic `wrap()` engine reads a ProviderManifest and produces a Proxy that
  * routes every described method through the standard call lifecycle (decision
@@ -105,11 +116,59 @@ export interface MethodSpec<Args = unknown, Res = unknown, Chunk = unknown> {
     readonly extractUsage: (res: Res) => UsageTotals;
     /** Optional factory returning a per-stream chunk → delta function. */
     readonly createStreamHandler?: () => (chunk: Chunk) => UsageDelta | null;
+    /**
+     * Set for methods that return synchronously an event-emitting stream object
+     * (e.g. Anthropic's `MessageStream` from `messages.stream()`) instead of a
+     * Promise. The engine invokes the method synchronously, wires usage capture
+     * by handing the returned object to `attachEventStream`, and returns that
+     * object untouched — preserving its `.on()` / `.finalMessage()` surface.
+     * Because the request fires synchronously there is no seam to gate it, so
+     * these calls are metered, not pre-blocked. Chunks decode via
+     * `createStreamHandler`, same as the async stream path.
+     */
+    readonly attachEventStream?: (stream: object, hooks: EventStreamHooks) => void;
+}
+
+/**
+ * One method on an object RETURNED by a factory call (e.g. the `Chat` from
+ * `chats.create`). Unlike `MethodSpec`, the model is not in each call's args —
+ * it was bound when the factory ran — so there is no `extractMeta`; the model
+ * is threaded in from the factory call and `isStream` is fixed per method.
+ */
+export interface FactoryMethodSpec<Res = unknown, Chunk = unknown> {
+    /** Method name on the returned object, e.g. "sendMessage". */
+    readonly name: string;
+    /** Whether this method returns a stream. */
+    readonly isStream: boolean;
+    /** Pull usage totals from a non-stream response. */
+    readonly extractUsage: (res: Res) => UsageTotals;
+    /** Optional factory returning a per-stream chunk → delta function. */
+    readonly createStreamHandler?: () => (chunk: Chunk) => UsageDelta | null;
+}
+
+/**
+ * A factory method (e.g. `chats.create`) that synchronously returns a stateful
+ * object whose own methods must be instrumented. The model is read once from
+ * the factory's args and threaded into every wrapped method on the returned
+ * object. The factory call itself is not metered — only the methods it exposes.
+ */
+export interface FactorySpec<CreateArgs = unknown> {
+    /** Dotted path to the factory method, e.g. ["chats", "create"]. */
+    readonly path: readonly string[];
+    /** Pull the model bound at factory time. */
+    readonly extractModel: (args: CreateArgs) => string;
+    /** Methods on the returned object to instrument. */
+    readonly methods: readonly FactoryMethodSpec[];
 }
 
 export interface ProviderManifest {
     readonly provider: string;
     readonly methods: readonly MethodSpec[];
+    /**
+     * Optional factory methods whose returned object needs its own
+     * instrumentation (e.g. Gemini's `chats.create` → `Chat.sendMessage`).
+     */
+    readonly factories?: readonly FactorySpec[];
     /** Required. Owns the "is this client an instance of my provider?" decision. */
     readonly detect: (client: object) => boolean;
 }
