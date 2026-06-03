@@ -112,6 +112,8 @@ const model = wrapLanguageModel({
 await generateText({ model, prompt: "hi" });
 ```
 
+`generateObject`, `streamObject`, and tool loops run on the same language model, so they are covered too. For other model kinds use `bursoraEmbeddingMiddleware` with `wrapEmbeddingModel` (`embed`/`embedMany`) and `bursoraImageMiddleware` with `wrapImageModel` (`generateImage`).
+
 ## Sharing one core across clients
 
 `wrap(client, { apiKey, endpoint })` builds a private decision cache + events

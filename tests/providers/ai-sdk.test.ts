@@ -21,11 +21,27 @@
 
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
-import { APICallError, generateText, stepCountIs, streamText, tool, wrapLanguageModel } from "ai";
+import {
+    APICallError,
+    embed,
+    embedMany,
+    generateImage,
+    generateText,
+    stepCountIs,
+    streamText,
+    tool,
+    wrapEmbeddingModel,
+    wrapImageModel,
+    wrapLanguageModel,
+} from "ai";
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
 import { BudgetExceededError } from "../../src/errors";
-import { bursoraMiddleware } from "../../src/providers/ai-sdk";
+import {
+    bursoraEmbeddingMiddleware,
+    bursoraImageMiddleware,
+    bursoraMiddleware,
+} from "../../src/providers/ai-sdk";
 import { withTags } from "../../src/tags";
 import type { Decision } from "../../src/types";
 import {
@@ -337,6 +353,170 @@ describe("real openai adapter through bursoraMiddleware — only the network is 
         const completion = h.events.reduce((s, e) => s + e.completionTokens, 0);
         expect(prompt).toBe(out.totalUsage.inputTokens ?? 0);
         expect(completion).toBe(out.totalUsage.outputTokens ?? 0);
+    });
+});
+
+describe("real openai embedding adapter through bursoraEmbeddingMiddleware — only the network is mocked", () => {
+    const embedModel = (fetchImpl: typeof fetch, core: ReturnType<typeof buildFakeCore>["core"]) =>
+        wrapEmbeddingModel({
+            model: createOpenAI({ apiKey: "test", fetch: fetchImpl }).embedding(
+                "text-embedding-3-small",
+            ),
+            middleware: bursoraEmbeddingMiddleware({ core }),
+        });
+
+    const embedBody = (tokens: number) => ({
+        object: "list",
+        model: "text-embedding-3-small",
+        data: [{ object: "embedding", index: 0, embedding: [0.1, 0.2, 0.3] }],
+        usage: { prompt_tokens: tokens, total_tokens: tokens },
+    });
+
+    test("embed records input tokens as promptTokens, no completion, provider normalized", async () => {
+        const calls: RecordedFetchCall[] = [];
+        const h = buildFakeCore(ALLOW);
+        const model = embedModel(
+            recordingFetch(calls, () => Promise.resolve(jsonResponse(embedBody(50)))),
+            h.core,
+        );
+
+        await embed({ model, value: "hello" });
+
+        expect(calls).toHaveLength(1);
+        expect(h.events).toHaveLength(1);
+        expect(h.events[0]?.provider).toBe("openai");
+        expect(h.events[0]?.model).toBe("text-embedding-3-small");
+        expect(h.events[0]?.promptTokens).toBe(50);
+        expect(h.events[0]?.completionTokens).toBe(0);
+        expect(h.events[0]?.errored).toBeFalsy();
+    });
+
+    test("embedMany meters each underlying embed call", async () => {
+        const calls: RecordedFetchCall[] = [];
+        const h = buildFakeCore(ALLOW);
+        // Each input over the model's batch limit triggers its own request; two
+        // short strings fit one call, so usage records once.
+        const model = embedModel(
+            recordingFetch(calls, () => Promise.resolve(jsonResponse(embedBody(12)))),
+            h.core,
+        );
+
+        await embedMany({ model, values: ["a", "b"] });
+
+        expect(h.events.length).toBeGreaterThanOrEqual(1);
+        expect(h.events.reduce((s, e) => s + e.promptTokens, 0)).toBeGreaterThan(0);
+    });
+
+    test("block decision throws before any network call; no event", async () => {
+        const calls: RecordedFetchCall[] = [];
+        const h = buildFakeCore(BLOCK);
+        const model = embedModel(
+            recordingFetch(calls, () => Promise.resolve(jsonResponse(embedBody(50)))),
+            h.core,
+        );
+
+        await expect(embed({ model, value: "hello" })).rejects.toBeInstanceOf(BudgetExceededError);
+        expect(calls).toHaveLength(0);
+        expect(h.events).toHaveLength(0);
+    });
+
+    test("provider 429 records an errored event and rethrows", async () => {
+        const h = buildFakeCore(ALLOW);
+        const model = embedModel(
+            recordingFetch([], () =>
+                Promise.resolve(
+                    jsonResponse({ error: { message: "boom", type: "rate_limit_exceeded" } }, 429),
+                ),
+            ),
+            h.core,
+        );
+
+        let caught: unknown;
+        try {
+            await embed({ model, value: "hello", maxRetries: 0 });
+        } catch (e) {
+            caught = e;
+        }
+
+        expect(APICallError.isInstance(caught)).toBe(true);
+        expect(h.events).toHaveLength(1);
+        expect(h.events[0]?.errored).toBe(true);
+        expect(h.events[0]?.promptTokens).toBe(0);
+    });
+});
+
+describe("real openai image adapter through bursoraImageMiddleware — only the network is mocked", () => {
+    const imageModel = (
+        modelId: string,
+        fetchImpl: typeof fetch,
+        core: ReturnType<typeof buildFakeCore>["core"],
+    ) =>
+        wrapImageModel({
+            model: createOpenAI({ apiKey: "test", fetch: fetchImpl }).image(modelId),
+            middleware: bursoraImageMiddleware({ core }),
+        });
+
+    test("gpt-image-1 maps input/output tokens to prompt/completion", async () => {
+        const calls: RecordedFetchCall[] = [];
+        const h = buildFakeCore(ALLOW);
+        const model = imageModel(
+            "gpt-image-1",
+            recordingFetch(calls, () =>
+                Promise.resolve(
+                    jsonResponse({
+                        created: 1,
+                        data: [{ b64_json: "aGk=" }],
+                        usage: { input_tokens: 12, output_tokens: 30, total_tokens: 42 },
+                    }),
+                ),
+            ),
+            h.core,
+        );
+
+        await generateImage({ model, prompt: "a cat" });
+
+        expect(calls).toHaveLength(1);
+        expect(h.events).toHaveLength(1);
+        expect(h.events[0]?.provider).toBe("openai");
+        expect(h.events[0]?.model).toBe("gpt-image-1");
+        expect(h.events[0]?.promptTokens).toBe(12);
+        expect(h.events[0]?.completionTokens).toBe(30);
+    });
+
+    test("per-image model with no token usage still gates and records 0 tokens", async () => {
+        const h = buildFakeCore(ALLOW);
+        const model = imageModel(
+            "dall-e-3",
+            recordingFetch([], () =>
+                Promise.resolve(jsonResponse({ created: 1, data: [{ b64_json: "aGk=" }] })),
+            ),
+            h.core,
+        );
+
+        await generateImage({ model, prompt: "a cat" });
+
+        expect(h.events).toHaveLength(1);
+        expect(h.events[0]?.model).toBe("dall-e-3");
+        expect(h.events[0]?.promptTokens).toBe(0);
+        expect(h.events[0]?.completionTokens).toBe(0);
+    });
+
+    test("block decision throws before any network call; no event", async () => {
+        const calls: RecordedFetchCall[] = [];
+        const h = buildFakeCore(BLOCK);
+        const model = imageModel(
+            "gpt-image-1",
+            recordingFetch(calls, () =>
+                Promise.resolve(jsonResponse({ created: 1, data: [{ b64_json: "aGk=" }] })),
+            ),
+            h.core,
+        );
+
+        await expect(generateImage({ model, prompt: "a cat" })).rejects.toBeInstanceOf(
+            BudgetExceededError,
+        );
+        expect(calls).toHaveLength(0);
+        expect(h.events).toHaveLength(0);
     });
 });
 
