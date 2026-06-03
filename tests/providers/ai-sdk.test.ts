@@ -521,7 +521,7 @@ describe("real openai image adapter through bursoraImageMiddleware — only the 
 });
 
 describe("real anthropic adapter through bursoraMiddleware — only the network is mocked", () => {
-    test("records the anthropic provider slug from a real messages call", async () => {
+    test("maps a real anthropic messages call: cache read+write summed, prompt excludes cache", async () => {
         const model = "claude-3-5-sonnet-20241022";
         const body = jsonResponse({
             id: "msg_real_01",
@@ -556,5 +556,11 @@ describe("real anthropic adapter through bursoraMiddleware — only the network 
         expect(h.events).toHaveLength(1);
         expect(h.events[0]?.provider).toBe("anthropic");
         expect(h.events[0]?.model).toBe(model);
+        // The adapter folds cache_creation + cache_read into inputTokens.total;
+        // both must land in cacheTokens (not promptTokens), matching the native
+        // Anthropic wrap which records prompt=input_tokens, cache=creation+read.
+        expect(h.events[0]?.promptTokens).toBe(13);
+        expect(h.events[0]?.cacheTokens).toBe(500);
+        expect(h.events[0]?.completionTokens).toBe(9);
     });
 });

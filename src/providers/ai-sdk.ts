@@ -464,21 +464,28 @@ function tagsFromProviderOptions(params: CallParamsLike | undefined): Tags {
 /**
  * Map AI SDK language usage to Bursora totals, reading both shapes the SDK ships:
  * AI SDK 5 (V2) reports flat `inputTokens`/`outputTokens`/`cachedInputTokens`
- * numbers; AI SDK 6 (V3) nests them (`inputTokens.{total,cacheRead,...}`,
- * `outputTokens.total`). All fields read defensively (external data). The
- * cached-read slice is billed cheaper, so it is split out of `promptTokens` into
- * `cacheTokens`, exactly like the OpenAI manifest splits
- * `prompt_tokens_details.cached_tokens`. Output maps straight to
- * `completionTokens` (it already includes reasoning tokens).
+ * numbers; AI SDK 6 (V3) nests them (`inputTokens.{total,cacheRead,cacheWrite}`,
+ * `outputTokens.total`). All fields read defensively (external data). The cache
+ * slices are billed apart from fresh prompt, so they are split out of
+ * `promptTokens` into `cacheTokens`. For V3, `inputTokens.total` folds in both
+ * `cacheRead` and `cacheWrite` (Anthropic cache_read + cache_creation), so both
+ * are summed — matching the native Anthropic wrap, which records
+ * `cache_creation + cache_read`. Output maps straight to `completionTokens` (it
+ * already includes reasoning tokens).
  */
 function mapUsage(usageRaw: unknown, requestId: string | undefined): UsageTotals {
     const u = asRecord(usageRaw) ?? {};
     const nestedInput = asRecord(u.inputTokens);
     const totalPrompt =
         (nestedInput ? numField(nestedInput, "total") : numField(u, "inputTokens")) ?? 0;
-    const cache = nestedInput
-        ? numField(nestedInput, "cacheRead")
-        : numField(u, "cachedInputTokens");
+    let cache: number | undefined;
+    if (nestedInput) {
+        const read = numField(nestedInput, "cacheRead");
+        const write = numField(nestedInput, "cacheWrite");
+        cache = read === undefined && write === undefined ? undefined : (read ?? 0) + (write ?? 0);
+    } else {
+        cache = numField(u, "cachedInputTokens");
+    }
     const completion =
         (nestedInput
             ? numField(asRecord(u.outputTokens) ?? {}, "total")

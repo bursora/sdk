@@ -16,6 +16,8 @@ Include a repro or proof of concept where you can. We aim to acknowledge within 
 - Budget-check bypass: the wrapper letting a call through after Bursora returned block.
 - Tampering with the usage events the SDK reports.
 
+Anthropic's `messages.stream()` / `beta.messages.stream()` helpers fire their request synchronously, so they are metered but not pre-blocked by design (the spend still counts toward the budget). Use `messages.create({ stream: true })` for a hard pre-call block. This is documented behavior, not a bypass.
+
 ## Supported versions
 
 Only the latest published `@bursora/sdk` is supported. Fixes ship on `main` first.

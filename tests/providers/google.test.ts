@@ -20,6 +20,7 @@
 
 import { ApiError, GoogleGenAI } from "@google/genai";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { BudgetExceededError } from "../../src/errors";
 import type { Decision } from "../../src/types";
 import { wrap } from "../../src/wrap";
 import { buildFakeCore, jsonResponse, sseResponse } from "../_harness";
@@ -184,6 +185,19 @@ describe("real @google/genai through wrap() — only the network is mocked", () 
         expect(h.events[0]?.promptTokens).toBe(6);
         expect(h.events[0]?.completionTokens).toBe(5);
         expect(h.events[0]?.cacheTokens).toBe(4);
+    });
+
+    test("block decision on chats.create().sendMessage throws before the provider call", async () => {
+        stubFetch(() => jsonResponse(NON_STREAM_BODY));
+        const h = buildFakeCore(BLOCK);
+        const wrapped = wrap(new GoogleGenAI({ apiKey: "test" }), h.core);
+
+        const chat = wrapped.chats.create({ model: MODEL });
+        await expect(chat.sendMessage({ message: "hi" })).rejects.toBeInstanceOf(
+            BudgetExceededError,
+        );
+        expect(calls).toHaveLength(0);
+        expect(h.events).toHaveLength(0);
     });
 
     test("chats.create().sendMessageStream records one event from the terminal chunk", async () => {
