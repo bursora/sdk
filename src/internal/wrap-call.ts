@@ -124,6 +124,7 @@ export function wrapEventStreamCall<Args, Response>(
         let completion = 0;
         let cache = 0;
         let cacheWrite = 0;
+        let cacheWrite1h = 0;
         let requestId: string | undefined;
         let settled = false;
 
@@ -143,6 +144,7 @@ export function wrapEventStreamCall<Args, Response>(
                 completion += delta.completionTokensDelta;
                 cache += delta.cacheTokensDelta ?? 0;
                 cacheWrite += delta.cacheWriteTokensDelta ?? 0;
+                cacheWrite1h += delta.cacheWrite1hTokensDelta ?? 0;
                 if (requestId === undefined && delta.requestId !== undefined) {
                     requestId = delta.requestId;
                 }
@@ -164,6 +166,7 @@ export function wrapEventStreamCall<Args, Response>(
                             completionTokens: completion,
                             ...(cache > 0 ? { cacheTokens: cache } : {}),
                             ...(cacheWrite > 0 ? { cacheWriteTokens: cacheWrite } : {}),
+                            ...(cacheWrite1h > 0 ? { cacheWrite1hTokens: cacheWrite1h } : {}),
                             ...(requestId !== undefined ? { requestId } : {}),
                         },
                         errored,
@@ -206,6 +209,7 @@ function wrapStream<Response>(
     let completion = 0;
     let cache = 0;
     let cacheWrite = 0;
+    let cacheWrite1h = 0;
     let requestId: string | undefined;
     let emitted = false;
 
@@ -225,6 +229,7 @@ function wrapStream<Response>(
                     // positive cache count is recorded.
                     ...(cache > 0 ? { cacheTokens: cache } : {}),
                     ...(cacheWrite > 0 ? { cacheWriteTokens: cacheWrite } : {}),
+                    ...(cacheWrite1h > 0 ? { cacheWrite1hTokens: cacheWrite1h } : {}),
                     ...(requestId !== undefined ? { requestId } : {}),
                 },
                 errored,
@@ -258,6 +263,7 @@ function wrapStream<Response>(
                             completion += delta.completionTokensDelta;
                             cache += delta.cacheTokensDelta ?? 0;
                             cacheWrite += delta.cacheWriteTokensDelta ?? 0;
+                            cacheWrite1h += delta.cacheWrite1hTokensDelta ?? 0;
                             if (requestId === undefined && delta.requestId !== undefined) {
                                 requestId = delta.requestId;
                             }

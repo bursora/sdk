@@ -390,6 +390,87 @@ describe("anthropic manifest wiring — mocked clients", () => {
         expect(h.events[0]?.errored).toBeUndefined();
     });
 
+    test("non-stream splits the 1-hour cache-write slice onto cacheWrite1hTokens", async () => {
+        const client = {
+            messages: {
+                create: async (_args: unknown) => ({
+                    id: "msg_1h",
+                    usage: {
+                        input_tokens: 10,
+                        output_tokens: 4,
+                        cache_creation_input_tokens: 500,
+                        cache_read_input_tokens: 100,
+                        cache_creation: { ephemeral_1h_input_tokens: 200 },
+                    },
+                }),
+            },
+        };
+        const h = buildFakeCore(ALLOW);
+        const wrapped = wrap(client, h.core);
+
+        await wrapped.messages.create({ model: MODEL, messages: [] });
+
+        expect(h.events).toHaveLength(1);
+        expect(h.events[0]?.cacheTokens).toBe(600);
+        expect(h.events[0]?.cacheWriteTokens).toBe(500);
+        // 200 of the 500 writes carried a 1-hour TTL.
+        expect(h.events[0]?.cacheWrite1hTokens).toBe(200);
+    });
+
+    test("non-stream omits cacheWrite1hTokens when no 1-hour writes", async () => {
+        const client = {
+            messages: {
+                create: async (_args: unknown) => ({
+                    id: "msg_no1h",
+                    usage: {
+                        input_tokens: 10,
+                        output_tokens: 4,
+                        cache_creation_input_tokens: 300,
+                    },
+                }),
+            },
+        };
+        const h = buildFakeCore(ALLOW);
+        const wrapped = wrap(client, h.core);
+
+        await wrapped.messages.create({ model: MODEL, messages: [] });
+
+        expect(h.events).toHaveLength(1);
+        expect(h.events[0]?.cacheWriteTokens).toBe(300);
+        expect(h.events[0]?.cacheWrite1hTokens).toBeUndefined();
+    });
+
+    test("messages.stream() carries the 1-hour write slice from message_start", () => {
+        const fake = new FakeMessageStream();
+        const client = {
+            messages: { create: async () => ({}), stream: (_args: unknown) => fake },
+        };
+        const h = buildFakeCore(ALLOW);
+        const wrapped = wrap(client, h.core);
+
+        wrapped.messages.stream({ model: MODEL, messages: [] });
+        fake.emit("streamEvent", {
+            type: "message_start",
+            message: {
+                id: "s1h",
+                usage: {
+                    input_tokens: 12,
+                    output_tokens: 0,
+                    cache_creation_input_tokens: 100,
+                    cache_read_input_tokens: 200,
+                    cache_creation: { ephemeral_1h_input_tokens: 40 },
+                },
+            },
+        });
+        fake.emit("streamEvent", { type: "message_delta", usage: { output_tokens: 8 } });
+        fake.emit("streamEvent", { type: "message_stop" });
+        fake.emit("end");
+
+        expect(h.events).toHaveLength(1);
+        expect(h.events[0]?.cacheWriteTokens).toBe(100);
+        expect(h.events[0]?.cacheWrite1hTokens).toBe(40);
+    });
+
     test("messages.stream() settles once; error then chained end records one errored event", () => {
         const fake = new FakeMessageStream();
         const client = {

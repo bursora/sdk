@@ -46,6 +46,15 @@ interface AnthropicUsage {
     readonly output_tokens?: number;
     readonly cache_creation_input_tokens?: number;
     readonly cache_read_input_tokens?: number;
+    /**
+     * TTL breakdown of `cache_creation_input_tokens`. Anthropic has two
+     * cache-write rates: 5-minute (1.25x base input) and 1-hour (2x). The merged
+     * `cache_creation_input_tokens` can't tell them apart, so the 1-hour slice is
+     * reported on its own and priced at 2x server-side.
+     */
+    readonly cache_creation?: {
+        readonly ephemeral_1h_input_tokens?: number;
+    };
 }
 
 interface MessagesResponse {
@@ -62,12 +71,14 @@ interface AnthropicStreamChunk {
 export function messagesUsage(response: MessagesResponse): UsageTotals {
     const u = response.usage;
     const cacheWrite = u?.cache_creation_input_tokens ?? 0;
+    const cacheWrite1h = u?.cache_creation?.ephemeral_1h_input_tokens ?? 0;
     const cache = cacheWrite + (u?.cache_read_input_tokens ?? 0);
     return {
         promptTokens: u?.input_tokens ?? 0,
         completionTokens: u?.output_tokens ?? 0,
         ...(cache > 0 ? { cacheTokens: cache } : {}),
         ...(cacheWrite > 0 ? { cacheWriteTokens: cacheWrite } : {}),
+        ...(cacheWrite1h > 0 ? { cacheWrite1hTokens: cacheWrite1h } : {}),
         ...(response.id !== undefined ? { requestId: response.id } : {}),
     };
 }
@@ -93,12 +104,14 @@ export function createAnthropicStreamHandler(): (chunk: unknown) => UsageDelta |
         if (chunk.type === "message_start" && chunk.message?.usage !== undefined) {
             const u = chunk.message.usage;
             const cacheWrite = u.cache_creation_input_tokens ?? 0;
+            const cacheWrite1h = u.cache_creation?.ephemeral_1h_input_tokens ?? 0;
             const cache = cacheWrite + (u.cache_read_input_tokens ?? 0);
             return {
                 promptTokensDelta: u.input_tokens ?? 0,
                 completionTokensDelta: u.output_tokens ?? 0,
                 cacheTokensDelta: cache,
                 cacheWriteTokensDelta: cacheWrite,
+                ...(cacheWrite1h > 0 ? { cacheWrite1hTokensDelta: cacheWrite1h } : {}),
                 ...(chunk.message.id !== undefined ? { requestId: chunk.message.id } : {}),
             };
         }
