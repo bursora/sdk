@@ -123,6 +123,7 @@ export function wrapEventStreamCall<Args, Response>(
         let prompt = 0;
         let completion = 0;
         let cache = 0;
+        let cacheWrite = 0;
         let requestId: string | undefined;
         let settled = false;
 
@@ -141,6 +142,7 @@ export function wrapEventStreamCall<Args, Response>(
                 prompt += delta.promptTokensDelta;
                 completion += delta.completionTokensDelta;
                 cache += delta.cacheTokensDelta ?? 0;
+                cacheWrite += delta.cacheWriteTokensDelta ?? 0;
                 if (requestId === undefined && delta.requestId !== undefined) {
                     requestId = delta.requestId;
                 }
@@ -161,6 +163,7 @@ export function wrapEventStreamCall<Args, Response>(
                             promptTokens: prompt,
                             completionTokens: completion,
                             ...(cache > 0 ? { cacheTokens: cache } : {}),
+                            ...(cacheWrite > 0 ? { cacheWriteTokens: cacheWrite } : {}),
                             ...(requestId !== undefined ? { requestId } : {}),
                         },
                         errored,
@@ -202,6 +205,7 @@ function wrapStream<Response>(
     let prompt = 0;
     let completion = 0;
     let cache = 0;
+    let cacheWrite = 0;
     let requestId: string | undefined;
     let emitted = false;
 
@@ -220,6 +224,7 @@ function wrapStream<Response>(
                     // 0 must omit the field (matches the non-stream path); only a
                     // positive cache count is recorded.
                     ...(cache > 0 ? { cacheTokens: cache } : {}),
+                    ...(cacheWrite > 0 ? { cacheWriteTokens: cacheWrite } : {}),
                     ...(requestId !== undefined ? { requestId } : {}),
                 },
                 errored,
@@ -252,6 +257,7 @@ function wrapStream<Response>(
                             prompt += delta.promptTokensDelta;
                             completion += delta.completionTokensDelta;
                             cache += delta.cacheTokensDelta ?? 0;
+                            cacheWrite += delta.cacheWriteTokensDelta ?? 0;
                             if (requestId === undefined && delta.requestId !== undefined) {
                                 requestId = delta.requestId;
                             }

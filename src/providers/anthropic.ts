@@ -61,11 +61,13 @@ interface AnthropicStreamChunk {
 
 export function messagesUsage(response: MessagesResponse): UsageTotals {
     const u = response.usage;
-    const cache = (u?.cache_creation_input_tokens ?? 0) + (u?.cache_read_input_tokens ?? 0);
+    const cacheWrite = u?.cache_creation_input_tokens ?? 0;
+    const cache = cacheWrite + (u?.cache_read_input_tokens ?? 0);
     return {
         promptTokens: u?.input_tokens ?? 0,
         completionTokens: u?.output_tokens ?? 0,
         ...(cache > 0 ? { cacheTokens: cache } : {}),
+        ...(cacheWrite > 0 ? { cacheWriteTokens: cacheWrite } : {}),
         ...(response.id !== undefined ? { requestId: response.id } : {}),
     };
 }
@@ -90,11 +92,13 @@ export function createAnthropicStreamHandler(): (chunk: unknown) => UsageDelta |
         const chunk = raw as AnthropicStreamChunk;
         if (chunk.type === "message_start" && chunk.message?.usage !== undefined) {
             const u = chunk.message.usage;
-            const cache = (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
+            const cacheWrite = u.cache_creation_input_tokens ?? 0;
+            const cache = cacheWrite + (u.cache_read_input_tokens ?? 0);
             return {
                 promptTokensDelta: u.input_tokens ?? 0,
                 completionTokensDelta: u.output_tokens ?? 0,
                 cacheTokensDelta: cache,
+                cacheWriteTokensDelta: cacheWrite,
                 ...(chunk.message.id !== undefined ? { requestId: chunk.message.id } : {}),
             };
         }

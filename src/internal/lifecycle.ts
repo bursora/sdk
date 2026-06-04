@@ -70,6 +70,9 @@ export function buildEventInput(
         promptTokens: usage?.promptTokens ?? 0,
         completionTokens: usage?.completionTokens ?? 0,
         ...(usage?.cacheTokens === undefined ? {} : { cacheTokens: usage.cacheTokens }),
+        ...(usage?.cacheWriteTokens === undefined
+            ? {}
+            : { cacheWriteTokens: usage.cacheWriteTokens }),
         ...(usage?.requestId === undefined ? {} : { requestId: usage.requestId }),
         ...(errored ? { errored: true } : {}),
     };

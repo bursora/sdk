@@ -61,6 +61,12 @@ export interface Usage {
     readonly promptTokens: number;
     readonly completionTokens: number;
     readonly cacheTokens?: number;
+    /**
+     * Subset of `cacheTokens` that are cache WRITES (Anthropic
+     * `cache_creation_input_tokens`). Writes bill above base input; reads
+     * (the remainder) bill below it, so the server prices the two apart.
+     */
+    readonly cacheWriteTokens?: number;
     readonly latencyMs?: number;
     readonly requestId?: string;
 }
@@ -74,6 +80,8 @@ export interface UsageTotals {
     readonly promptTokens: number;
     readonly completionTokens: number;
     readonly cacheTokens?: number;
+    /** Subset of `cacheTokens` that are cache writes; priced apart server-side. */
+    readonly cacheWriteTokens?: number;
     readonly requestId?: string;
 }
 
@@ -85,6 +93,8 @@ export interface UsageDelta {
     readonly promptTokensDelta: number;
     readonly completionTokensDelta: number;
     readonly cacheTokensDelta?: number;
+    /** Subset of `cacheTokensDelta` that are cache writes. */
+    readonly cacheWriteTokensDelta?: number;
     readonly requestId?: string;
 }
 

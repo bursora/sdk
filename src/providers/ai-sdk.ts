@@ -469,9 +469,10 @@ function tagsFromProviderOptions(params: CallParamsLike | undefined): Tags {
  * slices are billed apart from fresh prompt, so they are split out of
  * `promptTokens` into `cacheTokens`. For V3, `inputTokens.total` folds in both
  * `cacheRead` and `cacheWrite` (Anthropic cache_read + cache_creation), so both
- * are summed — matching the native Anthropic wrap, which records
- * `cache_creation + cache_read`. Output maps straight to `completionTokens` (it
- * already includes reasoning tokens).
+ * are summed into `cacheTokens` (matching the native Anthropic wrap), and the
+ * write slice is also reported on its own as `cacheWriteTokens` so the server
+ * prices writes (above base input) apart from reads (below it). Output maps
+ * straight to `completionTokens` (it already includes reasoning tokens).
  */
 function mapUsage(usageRaw: unknown, requestId: string | undefined): UsageTotals {
     const u = asRecord(usageRaw) ?? {};
@@ -479,11 +480,14 @@ function mapUsage(usageRaw: unknown, requestId: string | undefined): UsageTotals
     const totalPrompt =
         (nestedInput ? numField(nestedInput, "total") : numField(u, "inputTokens")) ?? 0;
     let cache: number | undefined;
+    let cacheWrite: number | undefined;
     if (nestedInput) {
         const read = numField(nestedInput, "cacheRead");
         const write = numField(nestedInput, "cacheWrite");
         cache = read === undefined && write === undefined ? undefined : (read ?? 0) + (write ?? 0);
+        cacheWrite = write;
     } else {
+        // V2 reports only the cache-read slice (`cachedInputTokens`); no writes.
         cache = numField(u, "cachedInputTokens");
     }
     const completion =
@@ -494,6 +498,7 @@ function mapUsage(usageRaw: unknown, requestId: string | undefined): UsageTotals
         promptTokens: Math.max(0, totalPrompt - (cache ?? 0)),
         completionTokens: completion,
         ...(cache === undefined ? {} : { cacheTokens: cache }),
+        ...(cacheWrite === undefined ? {} : { cacheWriteTokens: cacheWrite }),
         ...(requestId === undefined ? {} : { requestId }),
     };
 }

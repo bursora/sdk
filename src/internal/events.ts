@@ -17,6 +17,8 @@ export interface EventInput {
     readonly promptTokens: number;
     readonly completionTokens: number;
     readonly cacheTokens?: number;
+    /** Subset of `cacheTokens` that are cache writes; priced apart server-side. */
+    readonly cacheWriteTokens?: number;
     readonly ts: string;
     readonly tenantId?: string | null;
     readonly agentId?: string | null;

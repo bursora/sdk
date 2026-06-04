@@ -90,6 +90,8 @@ describe("real anthropic through wrap() — only the network is mocked", () => {
         expect(h.events[0]?.promptTokens).toBe(13);
         expect(h.events[0]?.completionTokens).toBe(9);
         expect(h.events[0]?.cacheTokens).toBe(500);
+        // 200 of the 500 cache tokens are writes (cache_creation_input_tokens).
+        expect(h.events[0]?.cacheWriteTokens).toBe(200);
     });
 
     test("streaming records one event summing named-SSE usage", async () => {
@@ -122,6 +124,8 @@ describe("real anthropic through wrap() — only the network is mocked", () => {
         expect(h.events[0]?.promptTokens).toBe(12);
         expect(h.events[0]?.completionTokens).toBe(8);
         expect(h.events[0]?.cacheTokens).toBe(300);
+        // message_start reports cache_creation_input_tokens: 100 of the 300.
+        expect(h.events[0]?.cacheWriteTokens).toBe(100);
     });
 
     test("block decision throws BudgetExceededError before the provider call", async () => {
