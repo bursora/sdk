@@ -179,14 +179,6 @@ export interface ProviderManifest {
      * instrumentation (e.g. Gemini's `chats.create` → `Chat.sendMessage`).
      */
     readonly factories?: readonly FactorySpec[];
-    /**
-     * Optional client-derived label overrides, resolved from the client
-     * instance (not call args). Lets a provider stamp a different provider slug
-     * and/or region per client — e.g. a Vertex-backed Google client labels as
-     * `vertex` + its region instead of `google`. Return `{}` (or omit a field)
-     * to keep the default baseURL-resolved provider and no region.
-     */
-    readonly resolveLabels?: (client: object) => { provider?: string; region?: string };
     /** Required. Owns the "is this client an instance of my provider?" decision. */
     readonly detect: (client: object) => boolean;
 }

@@ -14,11 +14,6 @@ import { createTransport, serializeError, type HttpResult } from "./transport";
 export interface EventInput {
     readonly provider: string;
     readonly model: string;
-    /**
-     * Provider region (e.g. a Vertex `us-central1`). Omitted for region-less
-     * providers; the server defaults the stored value to `global`.
-     */
-    readonly region?: string;
     readonly promptTokens: number;
     readonly completionTokens: number;
     readonly cacheTokens?: number;

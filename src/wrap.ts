@@ -114,7 +114,7 @@ export function wrap<T extends object>(
         if (target === undefined) continue;
         leaves.push([
             spec.path.join("."),
-            wrapMethod(target, spec, client, manifest, core, snapshotTap),
+            wrapMethod(target, spec, client, manifest.provider, core, snapshotTap),
         ]);
     }
 
@@ -126,7 +126,7 @@ export function wrap<T extends object>(
         if (target === undefined) continue;
         leaves.push([
             factory.path.join("."),
-            wrapFactory(target, factory, client, manifest, core, snapshotTap),
+            wrapFactory(target, factory, client, manifest.provider, core, snapshotTap),
         ]);
     }
 
@@ -144,38 +144,20 @@ function toBudgetSnapshot(decision: Decision): BudgetSnapshot | null {
     return { remainingUsd: decision.remainingUsd, resetAt: decision.resetAt };
 }
 
-// Resolve the provider slug + region stamped on every event for this client.
-// A manifest's `resolveLabels` hook (e.g. Google's Vertex detection) takes
-// precedence; otherwise the slug comes from the client's `baseURL` and there
-// is no region. Labels derive from the client instance, not call args, so the
-// result is constant for the wrapped client's lifetime.
-function clientLabels(
-    manifest: ProviderManifest,
-    client: object,
-): { provider: string; region?: string } {
-    const labels = manifest.resolveLabels?.(client) ?? {};
-    return {
-        provider: labels.provider ?? providerFromBaseURL(client, manifest.provider),
-        ...(labels.region === undefined ? {} : { region: labels.region }),
-    };
-}
-
 function wrapMethod(
     holder: MethodHolder,
     spec: MethodSpec,
     client: object,
-    manifest: ProviderManifest,
+    fallbackProvider: string,
     core: BursoraCore,
     decisionLookup: DecisionLookup,
 ): (args: unknown) => unknown {
-    const labels = clientLabels(manifest, client);
     const extractCallMeta = (args: unknown) => {
         const meta = spec.extractMeta(args);
         return {
-            provider: labels.provider,
+            provider: providerFromBaseURL(client, fallbackProvider),
             model: meta.model,
             isStream: meta.isStream,
-            ...(labels.region === undefined ? {} : { region: labels.region }),
         };
     };
 
@@ -218,7 +200,7 @@ function wrapFactory(
     holder: MethodHolder,
     factory: FactorySpec,
     client: object,
-    manifest: ProviderManifest,
+    fallbackProvider: string,
     core: BursoraCore,
     decisionLookup: DecisionLookup,
 ): (args: unknown) => unknown {
@@ -237,7 +219,7 @@ function wrapFactory(
                     fm,
                     model,
                     client,
-                    manifest,
+                    fallbackProvider,
                     core,
                     decisionLookup,
                 ),
@@ -253,21 +235,19 @@ function wrapFactoryMethod(
     spec: FactoryMethodSpec,
     model: string,
     client: object,
-    manifest: ProviderManifest,
+    fallbackProvider: string,
     core: BursoraCore,
     decisionLookup: DecisionLookup,
 ): (args: unknown) => Promise<unknown> {
-    const labels = clientLabels(manifest, client);
     return wrapCall<unknown, unknown>((args) => fn.call(thisArg, args), {
         decisionClient: decisionLookup,
         eventsClient: core.events,
         now: core.now,
         // Model is bound at factory time, so the per-call args are ignored here.
         extractCallMeta: () => ({
-            provider: labels.provider,
+            provider: providerFromBaseURL(client, fallbackProvider),
             model,
             isStream: spec.isStream,
-            ...(labels.region === undefined ? {} : { region: labels.region }),
         }),
         extractUsage: (res) => spec.extractUsage(res),
         ...(spec.createStreamHandler === undefined

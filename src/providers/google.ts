@@ -33,12 +33,6 @@
  *    zero-token. They reject on Developer-API clients; on Vertex-backed clients
  *    they gate and record.
  *
- * Vertex labeling: a `GoogleGenAI({ vertexai: true })` client speaks the same
- * `models.generateContent` shape, so detection and wrapping work unchanged — but
- * its calls bill against Vertex AI, not the Gemini Developer API. `resolveLabels`
- * stamps `provider="vertex"` and the client's `location` as the event region so
- * the backend prices Vertex (and its regional rates) apart from `google`.
- *
  * Token mapping decisions (kept consistent with the OpenAI manifest):
  *  - `cachedContentTokenCount` is a SUBSET of `promptTokenCount` (the cached
  *    portion of the prompt, billed at the cheaper cache rate). It is split out
@@ -226,30 +220,9 @@ const googleMethods: readonly MethodSpec[] = [
     ...zeroTokenMethods,
 ];
 
-// A `GoogleGenAI({ vertexai: true })` client matches the same shape but bills
-// against Vertex AI. Stamp `provider="vertex"` + the client's region so the
-// backend prices it apart from the Gemini Developer API. `vertexai` is a public
-// field; `location` lives on the internal `apiClient` (read defensively, since
-// it is not a stable public surface). A non-Vertex client returns `{}`, keeping
-// the default `google` label.
-function readVertexRegion(client: object): string | undefined {
-    const direct = (client as { location?: unknown }).location;
-    if (typeof direct === "string" && direct.length > 0) return direct;
-    const api = (client as { apiClient?: { getLocation?: () => unknown } }).apiClient;
-    const loc = api?.getLocation?.();
-    return typeof loc === "string" && loc.length > 0 ? loc : undefined;
-}
-
-function resolveGoogleLabels(client: object): { provider?: string; region?: string } {
-    if ((client as { vertexai?: unknown }).vertexai !== true) return {};
-    const region = readVertexRegion(client);
-    return { provider: "vertex", ...(region === undefined ? {} : { region }) };
-}
-
 export const googleManifest: ProviderManifest = {
     provider: PROVIDER,
     methods: googleMethods,
     factories: [chatsCreate],
-    resolveLabels: resolveGoogleLabels,
     detect: structurallyMatches(googleMethods),
 };

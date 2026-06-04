@@ -174,31 +174,6 @@ describe("real @google/genai through wrap() — only the network is mocked", () 
         expect(h.events[0]?.completionTokens).toBe(0);
     });
 
-    test("vertex-backed client stamps provider=vertex and the client region", async () => {
-        stubFetch(() => jsonResponse(NON_STREAM_BODY));
-        const h = buildFakeCore(ALLOW);
-        // A Vertex client (project/location, no apiKey) speaks the same shape;
-        // `vertexai` + `location` drive the labels.
-        const wrapped = wrap(
-            new GoogleGenAI({ vertexai: true, project: "p", location: "us-central1" }),
-            h.core,
-        );
-
-        // Vertex auth needs ADC credentials the test env lacks, so the call may
-        // reject before the (stubbed) network. Either way the lifecycle records
-        // exactly one event carrying the resolved vertex labels.
-        try {
-            await wrapped.models.generateContent({ model: MODEL, contents: "hi" });
-        } catch {
-            // asserting the recorded labels, not the call outcome
-        }
-
-        expect(h.events).toHaveLength(1);
-        expect(h.events[0]?.provider).toBe("vertex");
-        expect(h.events[0]?.region).toBe("us-central1");
-        expect(h.events[0]?.model).toBe(MODEL);
-    });
-
     test("generateImages records one event with zero tokens (Imagen bills per image)", async () => {
         stubFetch(() => jsonResponse(IMAGE_BODY));
         const h = buildFakeCore(ALLOW);
