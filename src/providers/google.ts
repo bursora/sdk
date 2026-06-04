@@ -21,9 +21,10 @@
  *    multi-turn chat. The returned Chat is proxied so its send methods route
  *    through the lifecycle; the model is captured from the `create` call. The
  *    responses reuse the `generateContent` usage extractor and stream handler.
- *  - `models.embedContent` — embeddings. The response carries NO `usageMetadata`
- *    (Gemini bills embeddings by input token but returns no count), so the call
- *    gates against the budget and records, but with zero tokens.
+ *  - `models.embedContent` — embeddings. Input tokens only (no completion).
+ *    Vertex returns per-embedding `statistics.tokenCount`, summed across the
+ *    batch as the prompt count; the Developer API omits it, so those calls gate
+ *    and record at zero tokens. No `usageMetadata` either way.
  *  - `models.generateImages` — Imagen generation. Billed per image, not per
  *    token; the response carries no usage, so it also gates and records at zero
  *    tokens. Same degrade the OpenAI manifest applies to DALL-E.
@@ -77,10 +78,18 @@ interface GenerateContentResponse {
     readonly usageMetadata?: GoogleUsageMetadata;
 }
 
-// `embedContent` and `generateImages` return no `usageMetadata`. Embeddings bill
-// by input token (count not reported); Imagen bills per image. Both still gate
-// and record, carrying zero tokens — the same degrade the OpenAI manifest
-// applies to per-image / per-second models that report no token usage.
+interface ContentEmbedding {
+    // Vertex (Gemini Enterprise Agent Platform) only; the Developer API omits it.
+    readonly statistics?: { readonly tokenCount?: number };
+}
+
+interface EmbedContentResponse {
+    readonly embeddings?: readonly ContentEmbedding[];
+}
+
+// `generateImages` (and the Vertex image ops) return no `usageMetadata` and
+// bill per image, so they gate and record carrying zero tokens — the same
+// degrade the OpenAI manifest applies to per-image / per-second models.
 const NO_TOKEN_USAGE: UsageTotals = { promptTokens: 0, completionTokens: 0 };
 
 function generateContentUsage(response: GenerateContentResponse): UsageTotals {
@@ -94,6 +103,19 @@ function generateContentUsage(response: GenerateContentResponse): UsageTotals {
         ...(cache > 0 ? { cacheTokens: cache } : {}),
         ...(response.responseId !== undefined ? { requestId: response.responseId } : {}),
     };
+}
+
+// Embeddings report input tokens only (no completion), mirroring OpenAI
+// embeddings. Vertex returns a per-embedding `statistics.tokenCount`; sum it
+// across the batch (one `embedContent` call can embed many inputs). The
+// Developer API omits the field, so the sum is 0 and the call records zero
+// tokens — it still gates and shows up grouped by model and tags.
+function embedContentUsage(response: EmbedContentResponse): UsageTotals {
+    const promptTokens = (response.embeddings ?? []).reduce(
+        (sum, e) => sum + (e.statistics?.tokenCount ?? 0),
+        0,
+    );
+    return { promptTokens, completionTokens: 0 };
 }
 
 // Gemini reports `usageMetadata` as cumulative running totals, typically on the
@@ -143,12 +165,18 @@ const generateContentStream: MethodSpec<
     createStreamHandler: createGoogleStreamHandler,
 };
 
-// Methods that gate and record but report no token usage. `embedContent` and
-// `generateImages` are Gemini Developer API; the rest are Gemini Enterprise
-// Agent Platform (Vertex AI) image ops. All are keyed only by `model` and
-// return no `usageMetadata`, so they share one generated spec.
+const embedContent: MethodSpec<ModelArgs, EmbedContentResponse> = {
+    path: ["models", "embedContent"],
+    optional: true,
+    extractMeta: (args) => ({ model: args.model, isStream: false }),
+    extractUsage: (res) => embedContentUsage(res as EmbedContentResponse),
+};
+
+// Image methods that gate and record but report no token usage. `generateImages`
+// is Gemini Developer API; the rest are Gemini Enterprise Agent Platform (Vertex
+// AI) image ops. All are keyed only by `model` and return no usage, so they
+// share one generated spec.
 const ZERO_TOKEN_PATHS: readonly (readonly string[])[] = [
-    ["models", "embedContent"],
     ["models", "generateImages"],
     ["models", "editImage"],
     ["models", "upscaleImage"],
@@ -188,6 +216,7 @@ const chatsCreate: FactorySpec = {
 const googleMethods: readonly MethodSpec[] = [
     generateContent as MethodSpec,
     generateContentStream as MethodSpec,
+    embedContent as MethodSpec,
     ...zeroTokenMethods,
 ];
 

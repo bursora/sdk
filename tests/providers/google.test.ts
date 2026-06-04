@@ -58,7 +58,14 @@ const TOOL_USE_BODY = {
 };
 
 // `:embedContent` and `:predict` (Imagen) responses carry no usageMetadata.
+// The Developer API omits per-embedding `statistics`; Vertex includes it.
 const EMBED_BODY = { embeddings: [{ values: [0.1, 0.2, 0.3] }] };
+const EMBED_BODY_WITH_STATS = {
+    embeddings: [
+        { values: [0.1], statistics: { tokenCount: 7 } },
+        { values: [0.2], statistics: { tokenCount: 5 } },
+    ],
+};
 const IMAGE_BODY = { predictions: [{ bytesBase64Encoded: "aGk=", mimeType: "image/png" }] };
 
 // Google's wire SSE carries no `[DONE]` sentinel, so the data-frames are
@@ -149,6 +156,22 @@ describe("real @google/genai through wrap() — only the network is mocked", () 
         expect(h.events[0]?.promptTokens).toBe(0);
         expect(h.events[0]?.completionTokens).toBe(0);
         expect(h.events[0]?.cacheTokens).toBeUndefined();
+    });
+
+    test("embedContent sums per-embedding input tokens from statistics (Vertex)", async () => {
+        // `statistics.tokenCount` is Vertex-only; the extractor sums it across
+        // the batch wherever the response carries it. Embeddings have no
+        // completion, so completionTokens stays 0.
+        stubFetch(() => jsonResponse(EMBED_BODY_WITH_STATS));
+        const h = buildFakeCore(ALLOW);
+        const wrapped = wrap(new GoogleGenAI({ apiKey: "test" }), h.core);
+
+        await wrapped.models.embedContent({ model: EMBED_MODEL, contents: ["a", "b"] });
+
+        expect(h.events).toHaveLength(1);
+        // 7 + 5 = 12 input tokens
+        expect(h.events[0]?.promptTokens).toBe(12);
+        expect(h.events[0]?.completionTokens).toBe(0);
     });
 
     test("generateImages records one event with zero tokens (Imagen bills per image)", async () => {
