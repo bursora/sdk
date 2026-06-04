@@ -27,6 +27,8 @@ export interface DecisionLookup {
 export interface RecordTarget {
     readonly provider: string;
     readonly model: string;
+    /** Optional provider region (e.g. a Vertex `us-central1`). */
+    readonly region?: string;
 }
 
 /**
@@ -62,6 +64,7 @@ export function buildEventInput(
     return {
         provider: target.provider,
         model: target.model,
+        ...(target.region === undefined ? {} : { region: target.region }),
         ts: new Date(startedAt).toISOString(),
         tenantId: tags.tenant_id ?? null,
         agentId: tags.agent_id ?? null,

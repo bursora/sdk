@@ -24,6 +24,8 @@ interface CallMeta {
     readonly provider: string;
     readonly model: string;
     readonly isStream: boolean;
+    /** Optional provider region (e.g. a Vertex `us-central1`). */
+    readonly region?: string;
 }
 
 export type StreamChunkHandler = (chunk: unknown) => UsageDelta | null;
