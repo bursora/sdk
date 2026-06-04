@@ -21,6 +21,12 @@ export interface EventInput {
     readonly cacheWriteTokens?: number;
     /** Subset of `cacheWriteTokens` written with a 1-hour TTL; billed at 2x server-side. */
     readonly cacheWrite1hTokens?: number;
+    /**
+     * True for asynchronous batch-API calls (OpenAI `batches`, Anthropic Message
+     * Batches), which the server prices at 50% off. Set by the batch metering
+     * helpers; the per-call wrap path never sets it. Absent → full price.
+     */
+    readonly batch?: boolean;
     readonly ts: string;
     readonly tenantId?: string | null;
     readonly agentId?: string | null;

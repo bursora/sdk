@@ -10,9 +10,11 @@
  *  - `beta.messages.create` / `.parse` / `.stream` — the beta-namespace mirror
  *    power users hit for newer features; identical usage shape.
  *
- * The token-counting endpoint (`messages.countTokens`) is free, and Message
- * Batches report usage only when results are fetched asynchronously, so neither
- * is instrumented here.
+ * The token-counting endpoint (`messages.countTokens`) is free, so it isn't
+ * instrumented here. Message Batches report usage only when results are fetched
+ * asynchronously — there's no request/response seam at submit — so they aren't
+ * auto-wrapped either; meter them at results-fetch with `meterAnthropicBatch`
+ * (see `../batch.ts`).
  *
  * Anthropic SSE quirks worth knowing:
  *  - `message_start.message.usage.input_tokens` is the prompt count;
