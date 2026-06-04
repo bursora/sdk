@@ -67,6 +67,12 @@ export interface Usage {
      * (the remainder) bill below it, so the server prices the two apart.
      */
     readonly cacheWriteTokens?: number;
+    /**
+     * Subset of `cacheWriteTokens` written with a 1-hour TTL (Anthropic
+     * `cache_creation.ephemeral_1h_input_tokens`). These bill at 2x base input
+     * versus 1.25x for 5-minute writes, so the server prices them apart.
+     */
+    readonly cacheWrite1hTokens?: number;
     readonly latencyMs?: number;
     readonly requestId?: string;
 }
@@ -82,6 +88,8 @@ export interface UsageTotals {
     readonly cacheTokens?: number;
     /** Subset of `cacheTokens` that are cache writes; priced apart server-side. */
     readonly cacheWriteTokens?: number;
+    /** Subset of `cacheWriteTokens` written with a 1-hour TTL; billed at 2x server-side. */
+    readonly cacheWrite1hTokens?: number;
     readonly requestId?: string;
 }
 
@@ -95,6 +103,8 @@ export interface UsageDelta {
     readonly cacheTokensDelta?: number;
     /** Subset of `cacheTokensDelta` that are cache writes. */
     readonly cacheWriteTokensDelta?: number;
+    /** Subset of `cacheWriteTokensDelta` written with a 1-hour TTL. */
+    readonly cacheWrite1hTokensDelta?: number;
     readonly requestId?: string;
 }
 

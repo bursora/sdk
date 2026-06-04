@@ -73,6 +73,9 @@ export function buildEventInput(
         ...(usage?.cacheWriteTokens === undefined
             ? {}
             : { cacheWriteTokens: usage.cacheWriteTokens }),
+        ...(usage?.cacheWrite1hTokens === undefined
+            ? {}
+            : { cacheWrite1hTokens: usage.cacheWrite1hTokens }),
         ...(usage?.requestId === undefined ? {} : { requestId: usage.requestId }),
         ...(errored ? { errored: true } : {}),
     };
