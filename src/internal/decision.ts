@@ -59,22 +59,6 @@ export interface DecisionClientOptions {
 export type ScopeKey = string & { readonly __scopeKey: unique symbol };
 
 /**
- * Wraps cache values with a format version so a future key-layout bump can
- * ignore stale entries. Bump `SCOPE_KEY_VERSION` whenever the join format,
- * cached payload shape, or any other key-affecting contract changes.
- */
-export interface VersionedCacheEntry<T> {
-    readonly version: number;
-    readonly value: T;
-}
-
-/**
- * Current cache-format version. Stays at 1 in shipped code; bumping it
- * implicitly invalidates every long-lived entry in deployed SDKs.
- */
-export const SCOPE_KEY_VERSION = 1;
-
-/**
  * Builds the canonical cache key for a (tenant, agent, workflow) scope.
  * Missing fields collapse to "", matching the server-side scope-key shape so
  * undefined vs. empty inputs never split a workspace across cache slots.
@@ -85,26 +69,6 @@ export function scopeKey(
     workflowId: string | undefined,
 ): ScopeKey {
     return [tenantId ?? "", agentId ?? "", workflowId ?? ""].join("|") as ScopeKey;
-}
-
-/**
- * Versioned cache read. Returns `undefined` (and evicts the stored entry)
- * when the entry's version doesn't match `expectedVersion`. This keeps
- * format-evolution safe: a v1 entry left behind by a previous SDK build
- * never poisons a v2 lookup.
- */
-export function readVersionedEntry<T, K extends string>(
-    cache: LRUCache<VersionedCacheEntry<T>, K>,
-    key: K,
-    expectedVersion: number,
-): T | undefined {
-    const entry = cache.get(key);
-    if (entry === undefined) return undefined;
-    if (entry.version !== expectedVersion) {
-        cache.delete(key);
-        return undefined;
-    }
-    return entry.value;
 }
 
 const DECISION_UNAVAILABLE = "bursora_decision_unavailable";
@@ -128,7 +92,7 @@ const MAX_DECISION_TTL_SECONDS = 3600;
  * @public
  */
 export function createDecisionClient(opts: DecisionClientOptions): DecisionClient {
-    const cache = new LRUCache<VersionedCacheEntry<Decision>, ScopeKey>({
+    const cache = new LRUCache<Decision, ScopeKey>({
         capacity: opts.cacheCapacity,
         now: opts.now,
     });
@@ -155,9 +119,8 @@ export function createDecisionClient(opts: DecisionClientOptions): DecisionClien
                     ? (`${scopeOnly}|${intent.provider}:${intent.model}` as ScopeKey)
                     : undefined;
             const cached =
-                (intentKey !== undefined
-                    ? readVersionedEntry(cache, intentKey, SCOPE_KEY_VERSION)
-                    : undefined) ?? readVersionedEntry(cache, scopeOnly, SCOPE_KEY_VERSION);
+                (intentKey !== undefined ? cache.get(intentKey) : undefined) ??
+                cache.get(scopeOnly);
             if (cached !== undefined) return cached;
 
             let url: string;
@@ -220,7 +183,7 @@ export function createDecisionClient(opts: DecisionClientOptions): DecisionClien
             if (effectiveTtl > 0) {
                 const writeKey =
                     parsed.mode === "block" && intentKey !== undefined ? intentKey : scopeOnly;
-                cache.set(writeKey, { version: SCOPE_KEY_VERSION, value: parsed }, effectiveTtl);
+                cache.set(writeKey, parsed, effectiveTtl);
             }
             return parsed;
         },

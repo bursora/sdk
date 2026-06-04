@@ -57,8 +57,9 @@ export type { BursoraCore } from "./wrap";
 
 export function createBursora(opts: BursoraOptions): BursoraCore {
     const now = opts.clock ?? ((): number => Date.now());
-    const decision = opts.decision ?? buildDefaultDecision(opts, now);
-    const events = opts.events ?? buildDefaultEvents(opts);
+    const decision =
+        opts.decision ?? createDecisionClient({ ...requireCreds(opts), cacheCapacity: 128, now });
+    const events = opts.events ?? createEventsClient(requireCreds(opts));
 
     return {
         decision,
@@ -67,16 +68,6 @@ export function createBursora(opts: BursoraOptions): BursoraCore {
         flush: () => safeFlush(events),
         dispose: () => events.dispose?.(),
     };
-}
-
-function buildDefaultDecision(opts: BursoraOptions, now: () => number): DecisionClient {
-    const { apiKey, endpoint } = requireCreds(opts);
-    return createDecisionClient({ apiKey, endpoint, cacheCapacity: 128, now });
-}
-
-function buildDefaultEvents(opts: BursoraOptions): EventsClient {
-    const { apiKey, endpoint } = requireCreds(opts);
-    return createEventsClient({ apiKey, endpoint });
 }
 
 function requireCreds(opts: BursoraOptions): { apiKey: string; endpoint: string } {

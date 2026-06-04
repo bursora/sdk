@@ -35,9 +35,9 @@ import type {
 } from "./types";
 
 /** @internal SDK internals; not part of the stable public API. */
-export type { EventsClient, SetupErrorInput, SetupErrorKind } from "./internal/events";
+export type { EventsClient } from "./internal/events";
 /** @internal SDK internals; not part of the stable public API. */
-export type { DecisionLookup, StreamChunkHandler } from "./internal/wrap-call";
+export type { DecisionLookup } from "./internal/wrap-call";
 export type { BudgetSnapshot, UsageDelta } from "./types";
 
 export interface BursoraCore {

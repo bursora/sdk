@@ -60,7 +60,9 @@ export function wrapCall<Args, Response>(
             // stack must survive that. Always rethrow the original.
             const originalError = err;
             try {
-                emitErrored(meta, tags, opts.eventsClient, opts.now, startedAt);
+                opts.eventsClient.record(
+                    buildEventInput(meta, tags, startedAt, opts.now(), null, true),
+                );
             } catch {
                 // swallow: recording must not poison the rethrow path
             }
@@ -88,16 +90,6 @@ export function wrapCall<Args, Response>(
         await safeFlush(opts.eventsClient);
         return response;
     };
-}
-
-function emitErrored(
-    meta: CallMeta,
-    tags: Tags,
-    eventsClient: EventsClient,
-    now: () => number,
-    startedAt: number,
-): void {
-    eventsClient.record(buildEventInput(meta, tags, startedAt, now(), null, true));
 }
 
 export interface WrapEventStreamOptions<Args> {

@@ -79,7 +79,7 @@ export function createTransport(opts: TransportOptions): Transport {
     };
 }
 
-export function categorizeStatus(status: number): FailureCategory {
+function categorizeStatus(status: number): FailureCategory {
     if (status === 401) return "auth_invalid";
     if (status === 429) return "rate_limited";
     return "server_error";
@@ -90,6 +90,6 @@ export function serializeError(err: unknown): string {
     return String(err);
 }
 
-export function isAbortError(err: unknown): boolean {
+function isAbortError(err: unknown): boolean {
     return err instanceof Error && err.name === "AbortError";
 }
