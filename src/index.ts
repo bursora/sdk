@@ -23,6 +23,9 @@
  *   - `bursoraEmbeddingMiddleware(opts)` / `bursoraImageMiddleware(opts)` — the
  *     same for `wrapEmbeddingModel` (`embed`/`embedMany`) and `wrapImageModel`
  *     (`generateImage`). `ai` is an optional peer dep.
+ *   - `wrapBedrock(client, optsOrCore)` — for AWS Bedrock Runtime clients, which
+ *     call `client.send(new ConverseCommand|InvokeModelCommand({ modelId }))`.
+ *     Returns a wrapped client that gates and meters each metered command.
  *   - `BudgetExceededError` — thrown when a block-mode budget rejects a call.
  */
 
@@ -32,6 +35,8 @@ export {
     bursoraImageMiddleware,
     bursoraMiddleware,
 } from "./providers/ai-sdk";
+/** @public */
+export { BEDROCK_FAMILIES, wrapBedrock } from "./providers/bedrock";
 /** @public */
 export { createBursora } from "./bursora";
 /** @public */
@@ -52,6 +57,8 @@ export type { BursoraOptions } from "./bursora";
 export type { CallIntent, DecisionClient, DecisionClientOptions } from "./internal/decision";
 /** @public */
 export type { EventInput, EventsClientOptions, EventsQueue } from "./internal/events";
+/** @public */
+export type { BedrockFamily } from "./providers/bedrock";
 export type { BudgetMode, Decision, Tags, Usage, UsageDelta } from "./types";
 export type { BudgetSnapshot } from "./wrap";
 /** @internal SDK internals; not part of the stable public API. */

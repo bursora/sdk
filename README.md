@@ -88,6 +88,32 @@ const deepseek = wrap(
 );
 ```
 
+## Amazon Bedrock
+
+Bedrock calls one `send` method with the model inside a command object, so it
+has its own wrapper, `wrapBedrock`, instead of shape detection. It gates and
+meters `ConverseCommand`, `ConverseStreamCommand`, `InvokeModelCommand`, and
+`InvokeModelWithResponseStreamCommand`; anything else passes through. Converse
+reports usage the same way for every model family, so prefer it. `@aws-sdk/*` is
+never imported by the SDK.
+
+```ts
+import { BedrockRuntimeClient, ConverseCommand } from "@aws-sdk/client-bedrock-runtime";
+import { wrapBedrock } from "@bursora/sdk";
+
+const bedrock = wrapBedrock(new BedrockRuntimeClient({ region: "us-east-1" }), {
+    apiKey,
+    endpoint,
+});
+
+await bedrock.send(
+    new ConverseCommand({
+        modelId: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        messages: [{ role: "user", content: [{ text: "hi" }] }],
+    }),
+);
+```
+
 ## Vercel AI SDK
 
 Apps on the `ai` package call `generateText({ model })` instead of constructing
