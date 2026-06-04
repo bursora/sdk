@@ -5,8 +5,8 @@
  *
  * Pick a mode, fill in the values (defaults pre-filled, enter to accept), run:
  *   seed     bulk-fill the dashboard with backdated events (direct ingest)
- *   anomaly  seed a baseline, fire a spike through the SDK wrap, trigger the
- *            alert cron
+ *   anomaly  seed a baseline, fire a spike through the SDK wrap, then wait for
+ *            the in-process anomaly cron to raise the alert
  *
  * Everything runs against the real local server: auth, ingest, budgets, cron.
  */

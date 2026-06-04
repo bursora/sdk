@@ -9,7 +9,7 @@ bun run start
 Two modes:
 
 - **seed** — bulk-fill the dashboard with backdated events. POSTs straight to the ingest endpoint in batches, so 10k+ events land in seconds. Spread across a mix of tenants, agents, workflows, and models so the dashboard groupings fill out.
-- **anomaly** — seed a low backdated baseline, fire a spike through the full SDK wrap, then trigger the anomaly cron so the alert fires.
+- **anomaly** — seed a low backdated baseline, fire a spike through the full SDK wrap, then wait for the in-process anomaly cron (every 5 min) to raise the alert.
 
 Auth, ingest, budgets, and the anomaly cron all run against the real local server.
 
@@ -24,7 +24,6 @@ cp .env.example .env  # then edit
 
 - `BURSORA_ENDPOINT` — local dev URL (`http://localhost:3000`)
 - `BURSORA_API_KEY` — plaintext secret (`bsk_<workspaceId>_<32hex>`) from `/workspace/<id>/keys`
-- `BURSORA_CRON_SECRET` — must match the server's `.env`; required for the anomaly mode to auto-trigger the cron
 
 ## Values
 

@@ -25,7 +25,7 @@ const TAGS = { tenant_id: TENANT, agent_id: AGENT };
 const BASELINE_BUCKETS = 23;
 const BUCKET_MS = 5 * 60_000;
 
-/** Seed a low backdated baseline, fire a spike through the SDK, trigger the cron. */
+/** Seed a low backdated baseline and fire a spike through the SDK; the in-process anomaly cron detects it. */
 export async function anomaly(env: Env, opts: AnomalyOptions): Promise<void> {
     // The detector compares the current 5-min bucket against prior buckets.
     // wrap() always stamps ts=now, so the baseline can only land via direct
@@ -68,13 +68,6 @@ export async function anomaly(env: Env, opts: AnomalyOptions): Promise<void> {
     s.stop(`baseline + spike sent (ok=${ok} blocked=${blocked})`);
     if (blocked > 0) log.warn("budget blocker stopped the spike — cron will see baseline only");
 
-    if (!env.cronSecret) {
-        log.info("set BURSORA_CRON_SECRET to auto-trigger /api/cron/anomaly");
-        return;
-    }
-    const res = await fetch(`${env.endpoint}/api/cron/anomaly`, {
-        headers: { Authorization: `Bearer ${env.cronSecret}` },
-    });
-    log.step(`cron ${res.status}: ${await res.text()}`);
+    log.info("anomaly detection runs in-process every 5 minutes; watch for the alert");
     log.success(`${env.endpoint}/workspace/${env.workspaceId}/alerts`);
 }

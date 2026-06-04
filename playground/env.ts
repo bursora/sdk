@@ -1,7 +1,6 @@
 export interface Env {
     readonly endpoint: string;
     readonly apiKey: string;
-    readonly cronSecret: string | undefined;
     readonly workspaceId: string;
 }
 
@@ -20,7 +19,6 @@ export function loadEnv(): Env {
     return {
         endpoint,
         apiKey,
-        cronSecret: process.env.BURSORA_CRON_SECRET || undefined,
         workspaceId: parts[1],
     };
 }
