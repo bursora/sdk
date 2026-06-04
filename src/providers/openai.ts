@@ -5,12 +5,17 @@
  * extractors; the generic `wrap()` engine reads this manifest to assemble the
  * Proxy. Instrumented: `chat.completions.create`, `chat.completions.parse`,
  * `responses.create`, `responses.parse`, `embeddings.create`,
- * `images.generate`, `images.edit`, and `audio.transcriptions.create`.
+ * `images.generate`, `images.edit`, `audio.transcriptions.create`,
+ * `audio.speech.create`, and `audio.translations.create`.
  *
- * Every instrumented method bills by token. Images and transcription report
- * token usage only on GPT-class models (gpt-image-1, gpt-4o-transcribe); legacy
- * models (DALL-E, whisper-1) bill per image / per second and report no token
- * usage, so those calls still gate and record but carry 0 tokens.
+ * Most instrumented methods bill by token. Images, transcription, and
+ * translation report token usage only on GPT-class models (gpt-image-1,
+ * gpt-4o-transcribe); legacy models (DALL-E per image, whisper-1 per second)
+ * report no token usage, so those calls still gate and record but carry 0
+ * tokens. `audio.speech.create` (TTS) always degrades to 0 tokens: it returns
+ * binary audio with no usage body, and per-character models (tts-1, tts-1-hd)
+ * have no token count at all. The call is still gated and attributed; a
+ * per-model pricing row keeps the event from dropping as unpriced server-side.
  */
 
 import {
@@ -79,6 +84,13 @@ interface ImageArgs {
 interface TranscriptionArgs {
     readonly model: string;
     readonly stream?: boolean | null;
+}
+
+// Speech (TTS) and translation calls only need the model for attribution.
+// Speech resolves to a binary `Response`; translation to `{ text }` — neither
+// carries a usage body, so both extract 0 tokens via `tokenPairUsage`.
+interface AudioModelArgs {
+    readonly model: string;
 }
 
 // OpenAI defaults image generation to dall-e-2 when `model` is omitted; mirror
@@ -253,6 +265,29 @@ const audioTranscriptionsCreate: MethodSpec<TranscriptionArgs, TokenUsageRespons
     createStreamHandler: createTokenPairStreamHandler,
 };
 
+// audio.speech.create (TTS) resolves to binary audio (an HTTP Response), never
+// a usage object — both per-character (tts-1, tts-1-hd) and per-token
+// (gpt-4o-mini-tts) models report nothing on the body, so every speech call
+// records 0 tokens. The call is still gated and the event recorded so TTS spend
+// is attributed instead of silent.
+const audioSpeechCreate: MethodSpec<AudioModelArgs, TokenUsageResponse> = {
+    path: ["audio", "speech", "create"],
+    optional: true,
+    extractMeta: (args) => ({ model: (args as AudioModelArgs).model, isStream: false }),
+    extractUsage: (res) => tokenPairUsage((res as TokenUsageResponse).usage),
+};
+
+// audio.translations.create mirrors transcription usage extraction. Translations
+// are whisper-1 only (per-second billing, no usage body) so they degrade to 0
+// tokens; the extractor reads input/output tokens if a token model ever appears.
+// The endpoint does not stream.
+const audioTranslationsCreate: MethodSpec<AudioModelArgs, TokenUsageResponse> = {
+    path: ["audio", "translations", "create"],
+    optional: true,
+    extractMeta: (args) => ({ model: (args as AudioModelArgs).model, isStream: false }),
+    extractUsage: (res) => tokenPairUsage((res as TokenUsageResponse).usage),
+};
+
 const openaiMethods: readonly MethodSpec[] = [
     chatCompletionsCreate as MethodSpec,
     responsesCreate as MethodSpec,
@@ -262,6 +297,8 @@ const openaiMethods: readonly MethodSpec[] = [
     imagesGenerate as MethodSpec,
     imagesEdit as MethodSpec,
     audioTranscriptionsCreate as MethodSpec,
+    audioSpeechCreate as MethodSpec,
+    audioTranslationsCreate as MethodSpec,
 ];
 
 export const openaiManifest: ProviderManifest = {
