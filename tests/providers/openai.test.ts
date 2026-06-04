@@ -120,6 +120,13 @@ const TRANSCRIBE_DURATION_BODY = {
 
 const audioFile = () => new File(["fake audio bytes"], "audio.mp3", { type: "audio/mpeg" });
 
+// audio.speech.create resolves to binary audio with no usage object.
+const speechResponse = () =>
+    new Response(new Uint8Array([0x49, 0x44, 0x33]), {
+        status: 200,
+        headers: { "content-type": "audio/mpeg" },
+    });
+
 describe("real openai through wrap() — only the network is mocked — non-stream", () => {
     test("chat.completions.create records one event, cache split out of prompt", async () => {
         const calls: RecordedFetchCall[] = [];
@@ -415,6 +422,35 @@ describe("real openai through wrap() — only the network is mocked — images, 
         await wrapped.audio.transcriptions.create({ model: "whisper-1", file: audioFile() });
 
         expect(h.events).toHaveLength(1);
+        expect(h.events[0]?.model).toBe("whisper-1");
+        expect(h.events[0]?.promptTokens).toBe(0);
+        expect(h.events[0]?.completionTokens).toBe(0);
+    });
+
+    test("audio.speech.create (tts-1) records the call with zero tokens", async () => {
+        const calls: RecordedFetchCall[] = [];
+        const h = buildFakeCore(ALLOW);
+        const wrapped = wrap(clientReturning(calls, speechResponse()), h.core);
+
+        await wrapped.audio.speech.create({ model: "tts-1", voice: "alloy", input: "hello there" });
+
+        expect(calls).toHaveLength(1);
+        expect(h.events).toHaveLength(1);
+        expect(h.events[0]?.provider).toBe("openai");
+        expect(h.events[0]?.model).toBe("tts-1");
+        expect(h.events[0]?.promptTokens).toBe(0);
+        expect(h.events[0]?.completionTokens).toBe(0);
+    });
+
+    test("audio.translations.create (whisper-1) records the call with zero tokens", async () => {
+        const calls: RecordedFetchCall[] = [];
+        const h = buildFakeCore(ALLOW);
+        const wrapped = wrap(clientReturning(calls, jsonResponse({ text: "hello" })), h.core);
+
+        await wrapped.audio.translations.create({ model: "whisper-1", file: audioFile() });
+
+        expect(h.events).toHaveLength(1);
+        expect(h.events[0]?.provider).toBe("openai");
         expect(h.events[0]?.model).toBe("whisper-1");
         expect(h.events[0]?.promptTokens).toBe(0);
         expect(h.events[0]?.completionTokens).toBe(0);
