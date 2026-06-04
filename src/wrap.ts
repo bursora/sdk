@@ -15,7 +15,7 @@
  */
 
 import { type BursoraOptions, createBursora } from "./bursora";
-import type { CallIntent } from "./internal/decision";
+import { createBudgetSnapshotTap } from "./internal/budget-snapshot";
 import type { EventsClient } from "./internal/events";
 import { type MethodHolder, resolvePath } from "./internal/path-resolver";
 import { providerFromBaseURL } from "./internal/provider-from-base-url";
@@ -26,12 +26,10 @@ import { googleManifest } from "./providers/google";
 import { openaiManifest } from "./providers/openai";
 import type {
     BudgetSnapshot,
-    Decision,
     FactoryMethodSpec,
     FactorySpec,
     MethodSpec,
     ProviderManifest,
-    Tags,
 } from "./types";
 
 /** @internal SDK internals; not part of the stable public API. */
@@ -83,24 +81,7 @@ export function wrap<T extends object>(
         );
     }
 
-    let latestSnapshot: BudgetSnapshot | null = null;
-    // Track the previously returned Decision by reference. The underlying
-    // `LRUCache` hands back the same Entry value on cache hits, so identity
-    // equality is a faithful "fresh fetch vs cache hit" signal: writing
-    // `latestSnapshot` on every lookup would rewrite the same headroom data
-    // and let consumers observe a phantom update mid-process.
-    let lastDecision: Decision | null = null;
-    const snapshotTap: DecisionLookup = {
-        async fetchDecision(tags: Tags, intent?: CallIntent): Promise<Decision | null> {
-            const decision = await core.decision.fetchDecision(tags, intent);
-            if (decision !== null && decision !== lastDecision) {
-                const next = toBudgetSnapshot(decision);
-                if (next !== null) latestSnapshot = next;
-                lastDecision = decision;
-            }
-            return decision;
-        },
-    };
+    const { decision: snapshotTap, readBudget } = createBudgetSnapshotTap(core.decision);
 
     // Use an array (not a Map) so duplicate paths in the manifest reach
     // buildProxy intact — buildProxy throws on collision instead of letting
@@ -132,16 +113,8 @@ export function wrap<T extends object>(
 
     return buildProxy(client, {
         leaves,
-        lifecycle: {
-            readBudget: () => latestSnapshot,
-        },
+        lifecycle: { readBudget },
     }) as Wrapped<T>;
-}
-
-function toBudgetSnapshot(decision: Decision): BudgetSnapshot | null {
-    if (typeof decision.remainingUsd !== "number") return null;
-    if (typeof decision.resetAt !== "string" || decision.resetAt === "") return null;
-    return { remainingUsd: decision.remainingUsd, resetAt: decision.resetAt };
 }
 
 function wrapMethod(
