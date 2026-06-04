@@ -107,7 +107,10 @@ export async function meterAnthropicBatch(
         const result = item.result;
         if (result?.type !== "succeeded" || result.message === undefined) continue;
         const message = result.message;
-        entries.push({ model: message.model ?? "", usage: messagesUsage(message) });
+        // Model is always present on a succeeded message; skip rather than emit
+        // an empty model, which the events endpoint rejects (model min length 1).
+        if (typeof message.model !== "string" || message.model === "") continue;
+        entries.push({ model: message.model, usage: messagesUsage(message) });
     }
     await recordBatchEntries(core, "anthropic", entries, opts);
 }
