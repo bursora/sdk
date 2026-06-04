@@ -269,10 +269,7 @@ function tapStream(
     };
     let metricsPrompt = 0;
     let metricsCompletion = 0;
-    const handler =
-        !isConverse && meta.family in BEDROCK_FAMILIES
-            ? BEDROCK_FAMILIES[meta.family]?.createStreamHandler?.()
-            : undefined;
+    const handler = isConverse ? undefined : BEDROCK_FAMILIES[meta.family]?.createStreamHandler?.();
     let settled = false;
 
     const finalize = async (errored: boolean): Promise<void> => {
