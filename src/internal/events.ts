@@ -106,6 +106,11 @@ const INGEST_UNAVAILABLE = "bursora_ingest_unavailable";
 const INGEST_PRICING_UNKNOWN = "bursora_pricing_unknown";
 const SETUP_ERROR_UNAVAILABLE = "bursora_setup_error_unavailable";
 const DEFAULT_INGEST_TIMEOUT_MS = 5000;
+// On a retryable failure (server unreachable or 5xx) the queue keeps its events
+// and retries on the next flush. Cap how many it holds so a long outage can't
+// grow memory without bound — fail-open must never harm the host app. Oldest
+// events drop first once the cap is hit.
+const MAX_BUFFERED_EVENTS = 1000;
 const MAX_PENDING_SETUP_ERRORS = 256;
 const PENDING_SETUP_ERROR_TTL_MS = 60 * 60 * 1000;
 
@@ -218,7 +223,35 @@ export function createEventsClient(opts: EventsClientOptions): ManagedEventsClie
                         log,
                         INGEST_UNAVAILABLE,
                     );
-                    if (result.ok) await reportUnpriced(result);
+                    if (result.ok) {
+                        await reportUnpriced(result);
+                    } else if (result.status === 0 || result.status >= 500) {
+                        // Server unreachable, timed out, or 5xx (deploy restart,
+                        // outage): keep the events and retry on the next flush
+                        // instead of dropping them. Best-effort, at-least-once: a
+                        // connection-refused / timeout / 5xx where the server never
+                        // recorded the batch is recovered in full; the server
+                        // dedups redelivery by request id, so calls that carry one
+                        // never double-count (an insert that failed *after* its
+                        // dedup key was marked still under-counts by the server's
+                        // never-double-bill design — the retry can't override it).
+                        // 401/429/4xx are not retried: resending won't help and
+                        // would re-trip rate / spike caps.
+                        //
+                        // Re-enqueue the failed events ahead of anything record()
+                        // appended during the in-flight POST (best-effort order;
+                        // the server sorts by event ts). Per-element push, not
+                        // `unshift(...events)`, so a large batch can't exceed the
+                        // engine's spread-argument limit. Oldest drop first at cap.
+                        const concurrent = queue.splice(0, queue.length);
+                        for (const e of events) queue.push(e);
+                        for (const e of concurrent) queue.push(e);
+                        if (queue.length > MAX_BUFFERED_EVENTS) {
+                            const dropped = queue.length - MAX_BUFFERED_EVENTS;
+                            queue.splice(0, dropped);
+                            log(INGEST_UNAVAILABLE, { category: "buffer_overflow", dropped });
+                        }
+                    }
                 }
             }
             evictExpiredSetupErrors();

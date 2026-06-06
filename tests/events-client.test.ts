@@ -63,6 +63,21 @@ const mockFetchBody = (body: unknown, status = 202): typeof fetch =>
             }),
         )) as unknown as typeof fetch;
 
+// Returns the status at each call index; the last entry repeats once exhausted.
+const mockFetchSeq = (calls: MockCall[], statuses: readonly number[]): typeof fetch => {
+    let i = 0;
+    return ((input: string | URL | Request, init?: RequestInit) => {
+        calls.push({
+            url: typeof input === "string" ? input : input.toString(),
+            headers: Object.fromEntries(new Headers(init?.headers).entries()),
+            body: typeof init?.body === "string" ? init.body : "",
+        });
+        const status = statuses[Math.min(i, statuses.length - 1)] ?? 202;
+        i++;
+        return Promise.resolve(new Response("", { status }));
+    }) as unknown as typeof fetch;
+};
+
 describe("eventsClient", () => {
     test("flush() POSTs /api/v1/events with X-Bursora-Key only (no signature)", async () => {
         const calls: MockCall[] = [];
@@ -177,6 +192,119 @@ describe("eventsClient", () => {
         client.record(baseEvent);
         await client.flush();
         expect(logs).toContain("bursora_ingest_unavailable");
+    });
+
+    test("re-sends events on the next flush after a 5xx (does not drop)", async () => {
+        const calls: MockCall[] = [];
+        const client = createEventsClient({
+            endpoint: "https://app.bursora.com",
+            apiKey: API_KEY,
+            fetch: mockFetchSeq(calls, [503, 202]),
+            log: () => {},
+        });
+        client.record(baseEvent);
+        await client.flush(); // 503: event kept, not dropped
+        await client.flush(); // 202: same event delivered
+        expect(calls).toHaveLength(2);
+        expect(JSON.parse(calls[1]?.body ?? "{}").events).toHaveLength(1);
+    });
+
+    test("re-sends events on the next flush after a network error", async () => {
+        const calls: MockCall[] = [];
+        let fail = true;
+        const fetchImpl = ((input: string | URL | Request, init?: RequestInit) => {
+            calls.push({
+                url: typeof input === "string" ? input : input.toString(),
+                headers: Object.fromEntries(new Headers(init?.headers).entries()),
+                body: typeof init?.body === "string" ? init.body : "",
+            });
+            if (fail) {
+                fail = false;
+                return Promise.reject(new Error("network"));
+            }
+            return Promise.resolve(new Response("", { status: 202 }));
+        }) as unknown as typeof fetch;
+        const client = createEventsClient({
+            endpoint: "https://app.bursora.com",
+            apiKey: API_KEY,
+            fetch: fetchImpl,
+            log: () => {},
+        });
+        client.record(baseEvent);
+        await client.flush(); // network error: kept
+        await client.flush(); // recovered: delivered
+        expect(calls).toHaveLength(2);
+        expect(JSON.parse(calls[1]?.body ?? "{}").events).toHaveLength(1);
+    });
+
+    test("does not retry on 401 (event dropped, no resend)", async () => {
+        const calls: MockCall[] = [];
+        const client = createEventsClient({
+            endpoint: "https://app.bursora.com",
+            apiKey: API_KEY,
+            fetch: mockFetchSeq(calls, [401, 202]),
+            log: () => {},
+        });
+        client.record(baseEvent);
+        await client.flush(); // 401: dropped, not buffered
+        await client.flush(); // queue empty: no second request
+        expect(calls).toHaveLength(1);
+    });
+
+    test("caps the retry buffer and drops oldest events", async () => {
+        const calls: MockCall[] = [];
+        const logs: { msg: string; meta: Record<string, unknown> | undefined }[] = [];
+        const client = createEventsClient({
+            endpoint: "https://app.bursora.com",
+            apiKey: API_KEY,
+            // Fail every flush except the final drain.
+            fetch: mockFetchSeq(calls, [503, 503, 202]),
+            log: (msg, meta) => logs.push({ msg, meta }),
+        });
+        for (let i = 0; i < 1001; i++) client.record({ ...baseEvent, requestId: `r${i}` });
+        await client.flush(); // 503: 1001 kept → over cap by 1 → drop 1
+        const overflow = logs.find((l) => l.meta?.category === "buffer_overflow");
+        expect(overflow?.meta?.dropped).toBe(1);
+        client.record({ ...baseEvent, requestId: "r-new" });
+        await client.flush(); // 503 again: 1001 kept → drop 1 more
+        await client.flush(); // 202: drain buffer
+        const delivered = JSON.parse(calls[2]?.body ?? "{}").events;
+        expect(delivered).toHaveLength(1000); // never exceeds the cap
+        // Oldest dropped: the very first event ("r0") is gone; newest survives.
+        expect(delivered.some((e: { requestId: string }) => e.requestId === "r-new")).toBe(true);
+        expect(delivered.some((e: { requestId: string }) => e.requestId === "r0")).toBe(false);
+    });
+
+    test("re-enqueued events stay ahead of events recorded during the in-flight POST", async () => {
+        const calls: MockCall[] = [];
+        let clientRef: EventsClient | null = null;
+        let firstCall = true;
+        const fetchImpl = ((input: string | URL | Request, init?: RequestInit) => {
+            calls.push({
+                url: typeof input === "string" ? input : input.toString(),
+                headers: Object.fromEntries(new Headers(init?.headers).entries()),
+                body: typeof init?.body === "string" ? init.body : "",
+            });
+            if (firstCall) {
+                firstCall = false;
+                // A new event lands while the failing POST is in flight.
+                clientRef?.record({ ...baseEvent, requestId: "during" });
+                return Promise.resolve(new Response("", { status: 503 }));
+            }
+            return Promise.resolve(new Response("", { status: 202 }));
+        }) as unknown as typeof fetch;
+        const client = createEventsClient({
+            endpoint: "https://app.bursora.com",
+            apiKey: API_KEY,
+            fetch: fetchImpl,
+            log: () => {},
+        });
+        clientRef = client;
+        client.record({ ...baseEvent, requestId: "failed" });
+        await client.flush(); // 503; "during" recorded mid-flight
+        await client.flush(); // 202; both delivered, oldest first
+        const sent = JSON.parse(calls[1]?.body ?? "{}").events;
+        expect(sent.map((e: { requestId: string }) => e.requestId)).toEqual(["failed", "during"]);
     });
 
     test("default surface emits console.warn once on 401 when no log provided", async () => {
