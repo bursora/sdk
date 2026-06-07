@@ -1,6 +1,6 @@
 {
     "name": "@bursora/sdk",
-    "version": "0.1.1",
+    "version": "0.2.0",
     "description": "Bursora SDK: wrap your AI provider client to enforce per-customer and per-agent budgets, no proxy.",
     "license": "MIT",
     "author": "Vildan Bina <vildanbina@gmail.com>",
