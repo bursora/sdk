@@ -1,22 +1,25 @@
 # @bursora/sdk
 
-Wrap your AI provider clients to enforce per-agent, per-tenant, and per-workflow
-budgets without a proxy; your app still calls the provider directly. Decisions
-cache for 60 seconds; usage reports flush after each call.
+[![npm](https://img.shields.io/npm/v/@bursora/sdk?style=flat-square&color=2563eb)](https://www.npmjs.com/package/@bursora/sdk)
+[![bundle size](https://img.shields.io/bundlephobia/minzip/@bursora/sdk?style=flat-square&label=minzip)](https://bundlephobia.com/package/@bursora/sdk)
+[![types](https://img.shields.io/npm/types/@bursora/sdk?style=flat-square)](https://bursora.com/docs/sdk/install)
+[![license](https://img.shields.io/npm/l/@bursora/sdk?style=flat-square)](./LICENSE)
+
+> Catch the runaway AI bill before it happens. One line around your provider client.
+
+AI calls bill by token. A stuck loop, a runaway agent, or one abusive customer can burn hundreds of dollars before anyone looks at a graph. Most tools show you the damage after it lands. Bursora checks the budget _before_ the call goes out and blocks it if it would blow a limit. Traffic light, not speed camera.
+
+This package is the wrap. No proxy, no gateway; your app still talks straight to OpenAI, Anthropic, or Google. Bursora just gets a yes/no first, then the real token cost after.
 
 ## Install
 
 ```bash
 npm i @bursora/sdk
-# or: bun add @bursora/sdk
-# or: pnpm add @bursora/sdk
 ```
 
-You also install the provider client of your choice (`openai`,
-`@anthropic-ai/sdk`, or `@google/genai`; DeepSeek reuses `openai`). The SDK uses
-structural typing, so it does not bundle them.
+Bring your own provider client (`openai`, `@anthropic-ai/sdk`, `@google/genai`, ...). The SDK detects them by shape, so it never bundles them.
 
-## Usage
+## 30 seconds
 
 ```ts
 import OpenAI from "openai";
@@ -35,146 +38,39 @@ await withTags({ tenant_id: "acme", agent_id: "support-bot" }, async () => {
         });
     } catch (e) {
         if (e instanceof BudgetExceededError) {
-            // budget hit — render fallback or downgrade model
-        } else {
-            throw e;
-        }
+            // over budget: downgrade the model, queue it, show a fallback
+        } else throw e;
     }
 });
 ```
 
-## Other providers
+Tag each call with who it's for (customer, agent, workflow). That's how spend gets grouped in the dashboard and how budgets know what to scope to.
 
-```ts
-import Anthropic from "@anthropic-ai/sdk";
-import { wrap } from "@bursora/sdk";
+## What you get
 
-const anthropic = wrap(new Anthropic(), { apiKey, endpoint });
-```
+- **Block before spend.** Over a hard limit? `BudgetExceededError` throws before the provider is ever called. No charge.
+- **Soft limits.** Notify and throttle modes let the call through and report after.
+- **Fail open.** Can't reach Bursora? Your call still goes out. We don't become your outage.
+- **Streaming-safe.** Chunks pass through untouched; usage is read off the final one.
+- Decisions cache for 60 seconds; usage flushes after each call.
 
-Google Gemini's native client (`@google/genai`) is detected by shape too. Wrap
-it the same way; instrumented methods are `models.generateContent`,
-`models.generateContentStream`, `models.embedContent`, `models.generateImages`,
-and the `chats.create(...)` chat (`sendMessage` / `sendMessageStream`).
+## More providers
 
-```ts
-import { GoogleGenAI } from "@google/genai";
-import { wrap } from "@bursora/sdk";
+OpenAI, Anthropic, and Google Gemini all wrap exactly like the example above; detection is by client shape. Bedrock has its own `wrapBedrock`. And on the Vercel AI SDK (`ai`) you use `bursoraMiddleware` with `wrapLanguageModel` instead of `wrap`, since `generateText` never constructs a client for `wrap` to see.
 
-const genai = wrap(new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }), {
-    apiKey,
-    endpoint,
-});
+Pick yours and copy the snippet:
 
-await genai.models.generateContent({
-    model: "gemini-2.5-flash",
-    contents: "hi",
-});
-```
+- **[OpenAI](https://bursora.com/docs/sdk/providers/openai)** · **[Anthropic](https://bursora.com/docs/sdk/providers/anthropic)** · **[Google](https://bursora.com/docs/sdk/providers/google)**
+- **[Amazon Bedrock](https://bursora.com/docs/sdk/providers/bedrock)**
+- **[DeepSeek, Groq, xAI, Mistral and other OpenAI-compatible](https://bursora.com/docs/sdk/providers/openai-compatible)**
+- **[Vercel AI SDK](https://bursora.com/docs/sdk/ai-sdk)**
 
-DeepSeek has no first-party SDK; reuse the `openai` package and override
-`baseURL`. The wrapper detects the override and tags events accordingly.
-
-```ts
-import OpenAI from "openai";
-import { wrap } from "@bursora/sdk";
-
-const deepseek = wrap(
-    new OpenAI({
-        apiKey: process.env.DEEPSEEK_API_KEY,
-        baseURL: "https://api.deepseek.com",
-    }),
-    { apiKey, endpoint },
-);
-```
-
-## Amazon Bedrock
-
-Bedrock calls one `send` method with the model inside a command object, so it
-has its own wrapper, `wrapBedrock`, instead of shape detection. It gates and
-meters `ConverseCommand`, `ConverseStreamCommand`, `InvokeModelCommand`, and
-`InvokeModelWithResponseStreamCommand`; anything else passes through. Converse
-reports usage the same way for every model family, so prefer it. `@aws-sdk/*` is
-never imported by the SDK.
-
-```ts
-import { BedrockRuntimeClient, ConverseCommand } from "@aws-sdk/client-bedrock-runtime";
-import { wrapBedrock } from "@bursora/sdk";
-
-const bedrock = wrapBedrock(new BedrockRuntimeClient({ region: "us-east-1" }), {
-    apiKey,
-    endpoint,
-});
-
-await bedrock.send(
-    new ConverseCommand({
-        modelId: "anthropic.claude-3-5-sonnet-20241022-v2:0",
-        messages: [{ role: "user", content: [{ text: "hi" }] }],
-    }),
-);
-```
-
-## Vercel AI SDK
-
-Apps on the `ai` package call `generateText({ model })` instead of constructing
-a provider client, so `wrap()` never sees those calls. Use `bursoraMiddleware`
-with `wrapLanguageModel` instead. It gates each call before it goes out (a
-block-mode denial throws `BudgetExceededError` out of `generateText`) and meters
-every step of a tool loop after. `ai` is an optional peer dependency.
-
-```ts
-import { openai } from "@ai-sdk/openai";
-import { generateText, wrapLanguageModel } from "ai";
-import { bursoraMiddleware } from "@bursora/sdk";
-
-const model = wrapLanguageModel({
-    model: openai("gpt-4o"),
-    middleware: bursoraMiddleware({
-        apiKey,
-        endpoint,
-        tags: { tenant_id: "acme", agent_id: "support-bot" },
-    }),
-});
-
-await generateText({ model, prompt: "hi" });
-```
-
-`generateObject`, `streamObject`, and tool loops run on the same language model, so they are covered too. For other model kinds use `bursoraEmbeddingMiddleware` with `wrapEmbeddingModel` (`embed`/`embedMany`) and `bursoraImageMiddleware` with `wrapImageModel` (`generateImage`).
-
-## Sharing one core across clients
-
-`wrap(client, { apiKey, endpoint })` builds a private decision cache + events
-queue for that wrapped client. If you wrap several providers and want them to
-share one queue (so a single `flush()` drains all of them), build the core
-yourself with `createBursora` and pass it in.
-
-```ts
-import Anthropic from "@anthropic-ai/sdk";
-import OpenAI from "openai";
-import { createBursora, wrap } from "@bursora/sdk";
-
-const core = createBursora({ apiKey, endpoint });
-const openai = wrap(new OpenAI(), core);
-const anthropic = wrap(new Anthropic(), core);
-
-// ...calls...
-await core.flush();
-core.dispose();
-```
-
-## Behaviour
-
-- Pre-call: SDK checks `/api/v1/budget` (60 s decision cache).
-- Block mode: SDK throws `BudgetExceededError` before the provider call. No
-  provider charge.
-- Notify / throttle: SDK calls the provider; events are emitted post-call.
-- Fail open: if Bursora is unreachable, your call still goes through.
-- Streaming: chunks pass through unchanged; usage is read from the final chunk.
+Tags, batch metering, sharing one core across clients, budget snapshots, error handling: it's all in the docs. Start at **[bursora.com/docs/sdk/install](https://bursora.com/docs/sdk/install)**.
 
 ## API key
 
-Sign in at [bursora.com](https://bursora.com) to get your `BURSORA_API_KEY`.
+Sign in at [bursora.com](https://bursora.com), create a workspace, grab your `BURSORA_API_KEY`.
 
 ## License
 
-MIT License. Copyright (c) 2026 Vildan Bina.
+MIT. © 2026 Vildan Bina.
